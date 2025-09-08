@@ -755,11 +755,14 @@ class InputNumberSliderComboCard extends HTMLElement {
         position: relative;
         touch-action: pan-y;
       }
+      .value-container::after {
+        ${underlineThickness && underlineThickness !== '0px' && underlineThickness !== '0' ? `content: ''; position: absolute; bottom: 0px; left: 0; right: 0; height: ${underlineThickness}; background: ${underlineColor}; border: none; box-shadow: none;` : ''}
+      }
       ha-textfield {
-        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-text-field-idle-line-color: transparent !important; --mdc-text-field-hover-line-color: transparent !important; --mdc-text-field-focus-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-text-field-outlined-idle-border-color: transparent !important; --mdc-text-field-outlined-hover-border-color: transparent !important; --mdc-text-field-outlined-focused-border-color: transparent !important;' : underlineColor ? `--mdc-text-field-focus-line-color: ${underlineColor} !important; --mdc-text-field-outlined-focused-border-color: ${underlineColor} !important;` : ''}
+        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-text-field-idle-line-color: transparent !important; --mdc-text-field-hover-line-color: transparent !important; --mdc-text-field-focus-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-text-field-outlined-idle-border-color: transparent !important; --mdc-text-field-outlined-hover-border-color: transparent !important; --mdc-text-field-outlined-focused-border-color: transparent !important;' : ''}
       }
       ha-select {
-        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-select-idle-line-color: transparent !important; --mdc-select-hover-line-color: transparent !important; --mdc-select-focused-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-select-outlined-idle-border-color: transparent !important; --mdc-select-outlined-hover-border-color: transparent !important; --mdc-select-outlined-focused-border-color: transparent !important;' : underlineColor ? `--mdc-select-focused-line-color: ${underlineColor} !important; --mdc-select-outlined-focused-border-color: ${underlineColor} !important;` : ''}
+        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-select-idle-line-color: transparent !important; --mdc-select-hover-line-color: transparent !important; --mdc-select-focused-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-select-outlined-idle-border-color: transparent !important; --mdc-select-outlined-hover-border-color: transparent !important; --mdc-select-outlined-focused-border-color: transparent !important;' : ''}
       }
       ha-textfield {
         ${inputBg ? `--mdc-text-field-fill-color: ${inputBg};` : ''}
