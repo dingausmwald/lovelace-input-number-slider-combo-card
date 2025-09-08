@@ -103,7 +103,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._config = {
       height: undefined,
       input_background: undefined,
-      input_width: undefined,
+      width: undefined,
       underline: { thickness: undefined, color: 'var(--primary-color)' },
       show_hold_slider: false,
       hide_spinners: false,
@@ -717,7 +717,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     const unit = this._getUnit();
     const height = this._config?.height;
     const inputBg = this._config?.input_background;
-    const inputWidth = this._config?.input_width;
+    const inputWidth = this._config?.width;
     const underlineThickness = this._config?.underline?.thickness;
     const underlineColor = this._config?.underline?.color;
 
@@ -1140,7 +1140,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
         show_hold_slider: false,
         underline: { thickness: undefined, color: 'var(--primary-color)' },
         name: undefined,
-        input_width: undefined,
+        width: undefined,
         ...config,
       };
       this._ensureEditorDeps();
@@ -1188,7 +1188,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       if (key === 'underline.thickness' || key === 'underline.color') {
         const [, sub] = key.split('.');
         this._config.underline = { ...this._config.underline, [sub]: value };
-      } else if (key === 'height' || key === 'input_background' || key === 'input_width' || key === 'name') {
+      } else if (key === 'height' || key === 'input_background' || key === 'width' || key === 'name') {
         this._config[key] = value || undefined;
       }
       this._emitConfig(this._config);
@@ -1242,8 +1242,8 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       // Width
       const width = document.createElement('ha-textfield');
       width.label = 'Width (e.g. 120px)';
-      width.value = this._config.input_width || '';
-      width.dataset.key = 'input_width';
+      width.value = this._config.width || '';
+      width.dataset.key = 'width';
       width.addEventListener('change', (e) => this._onTextChange(e));
       root.appendChild(mkRow('Width', width));
 
