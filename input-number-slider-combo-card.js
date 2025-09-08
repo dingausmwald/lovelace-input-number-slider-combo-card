@@ -755,16 +755,11 @@ class InputNumberSliderComboCard extends HTMLElement {
         position: relative;
         touch-action: pan-y;
       }
-      .underline {
-        position: absolute;
-        bottom: 0;
-        right: 0;
-        left: 0;
-        ${underlineThickness ? `height: ${underlineThickness}; background: ${underlineColor}; opacity: 0.6;` : 'height: 0; background: transparent;'}
-        pointer-events: none;
+      ha-textfield {
+        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-text-field-idle-line-color: transparent !important; --mdc-text-field-hover-line-color: transparent !important; --mdc-text-field-focus-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-text-field-outlined-idle-border-color: transparent !important; --mdc-text-field-outlined-hover-border-color: transparent !important; --mdc-text-field-outlined-focused-border-color: transparent !important;' : underlineColor ? `--mdc-text-field-focus-line-color: ${underlineColor} !important; --mdc-text-field-outlined-focused-border-color: ${underlineColor} !important;` : ''}
       }
-      .value-container:has(ha-select) .underline {
-        bottom: 8px;
+      ha-select {
+        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-select-idle-line-color: transparent !important; --mdc-select-hover-line-color: transparent !important; --mdc-select-focused-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-select-outlined-idle-border-color: transparent !important; --mdc-select-outlined-hover-border-color: transparent !important; --mdc-select-outlined-focused-border-color: transparent !important;' : underlineColor ? `--mdc-select-focused-line-color: ${underlineColor} !important; --mdc-select-outlined-focused-border-color: ${underlineColor} !important;` : ''}
       }
       ha-textfield {
         ${inputBg ? `--mdc-text-field-fill-color: ${inputBg};` : ''}
@@ -1000,11 +995,7 @@ class InputNumberSliderComboCard extends HTMLElement {
       inputContainer = selectEl;
     }
 
-    const underline = document.createElement('div');
-    underline.className = 'underline';
-
     right.appendChild(inputContainer);
-    right.appendChild(underline);
 
     // Confirmation click handler
     const confirmHandler = (ev) => {
