@@ -1,6 +1,10 @@
 # Lovelace Input Number Slider Combo Card
 
-Custom Lovelace card for Home Assistant with **Long Press Slider** functionality for `input_number` entities.
+Custom Lovelace card for Home Assistant with **Long Press Slider** functionality for `input_number, input_datetime and input_select` entities.
+
+<img width="472" height="133" alt="image" src="https://github.com/user-attachments/assets/33175696-3007-466e-9a24-f53e5e25aff3" />
+<img width="472" height="133" alt="image" src="https://github.com/user-attachments/assets/d19ee82c-de2d-4a18-8537-1773f7d1d6ad" />
+
 
 ![slider](https://github.com/user-attachments/assets/db7fba9a-7d56-43de-abbe-86a9ac0f9d50)
 ![konfig](https://github.com/user-attachments/assets/c327bbd4-44bb-41fb-b072-37b8eccf886a)
