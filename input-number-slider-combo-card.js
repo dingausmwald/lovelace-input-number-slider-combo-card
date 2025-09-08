@@ -733,12 +733,17 @@ class InputNumberSliderComboCard extends HTMLElement {
         align-items: center;
         gap: 12px;
       }
-      .icon { color: var(--state-icon-color); cursor: pointer; }
+      .icon { 
+        color: var(--state-icon-color); 
+        cursor: pointer; 
+        margin-left: 8px;
+      }
       .name {
         color: var(--primary-text-color);
         font-size: 14px;
         line-height: 1.2;
         overflow: hidden;
+        margin-left: 8px;
         text-overflow: ellipsis;
         white-space: nowrap;
         cursor: pointer;
