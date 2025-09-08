@@ -26,6 +26,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._inputEl = null;
     this._isPressing = false;
     this._refocusAfterCommit = false;
+    this._timeComponent = null;
 
     this._onKeydown = (e) => {
       if (e.key === 'Escape') this._cancelAdjust(true);
@@ -46,7 +47,10 @@ class InputNumberSliderComboCard extends HTMLElement {
   }
 
   static getStubConfig(hass) {
-    const first = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_number.'));
+    const inputNumber = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_number.'));
+    const inputDatetime = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_datetime.'));
+    const inputSelect = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_select.'));
+    const first = inputNumber || inputDatetime || inputSelect;
     return { entity: first || 'input_number.example', height: '30px' };
   }
 
@@ -56,13 +60,17 @@ class InputNumberSliderComboCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error('invalid config');
-    if (config.entity && (typeof config.entity !== 'string' || !config.entity.startsWith('input_number.'))) {
-      throw new Error('entity must be an input_number.*');
+    if (config.entity && typeof config.entity === 'string') {
+      const validPrefixes = ['input_number.', 'input_datetime.', 'input_select.'];
+      if (!validPrefixes.some(prefix => config.entity.startsWith(prefix))) {
+        throw new Error('entity must be an input_number.*, input_datetime.*, or input_select.*');
+      }
     }
 
     this._config = {
       height: undefined,
       input_background: undefined,
+      input_width: undefined,
       underline: { thickness: undefined, color: 'var(--primary-color)' },
       show_hold_slider: false,
       hide_spinners: false,
@@ -88,51 +96,82 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._entity = entity;
     if (!entity) return;
     
-    const num = Number(entity.state);
+    const entityType = this._getEntityType();
+    let currentValue = entity.state;
+    
+    // Handle different entity types
+    if (entityType === 'input_number') {
+      const num = Number(entity.state);
+      if (Number.isNaN(num)) return;
+      currentValue = num;
+    } else if (entityType === 'input_datetime') {
+      // input_datetime state can be date, time, or datetime - extract time part
+      if (entity.state.includes(' ')) {
+        // datetime format: "2023-12-25 14:30:00" -> "14:30"
+        currentValue = entity.state.split(' ')[1].substring(0, 5);
+      } else if (entity.state.includes(':')) {
+        // time format: "14:30:00" -> "14:30"
+        currentValue = entity.state.substring(0, 5);
+      } else {
+        // date only - not supported for our time inputs
+        currentValue = '00:00';
+      }
+    } else if (entityType === 'input_select') {
+      // input_select state is the selected option
+      currentValue = entity.state;
+    }
+    
     const attrsSig = this._attrsSignature(entity);
     const attrsChanged = this._lastAttrsSig !== attrsSig;
+    this._lastAttrsSig = attrsSig;
     
-    if (!Number.isNaN(num)) {
-      this._lastAttrsSig = attrsSig;
-      const focusedEl = this.shadowRoot?.activeElement;
-      const inputFocused = focusedEl?.classList?.contains('value-input');
-      const inUserControl = this._isAdjusting || this._commitArmed || this._awaitingServiceResult;
-      
-      if (inUserControl) {
-        if (this._awaitingServiceResult && this._lastSentValue !== undefined && num === this._lastSentValue) {
-          this._value = num;
-          this._awaitingServiceResult = false;
-          this._isAdjusting = false;
-          this._commitArmed = false;
-          this._showHoldSlider = false;
-          if (this._inputEl) {
-            this._inputEl.readOnly = false;
-            this._inputEl.classList.remove('no-select');
-          }
-          this._render();
-          if (this._refocusAfterCommit) {
-            this._refocusAfterCommit = false;
-            requestAnimationFrame(() => {
-              try { this._inputEl?.focus({ preventScroll: true }); } catch (_) { this._inputEl?.focus(); }
-            });
-          }
+    const focusedEl = this.shadowRoot?.activeElement;
+    const inputFocused = focusedEl?.classList?.contains('value-input');
+    const inUserControl = this._isAdjusting || this._commitArmed || this._awaitingServiceResult;
+    
+    if (inUserControl) {
+      if (this._awaitingServiceResult && this._lastSentValue !== undefined && 
+          ((entityType === 'input_number' && currentValue === this._lastSentValue) ||
+           (entityType !== 'input_number' && currentValue === this._lastSentValue))) {
+        this._value = currentValue;
+        this._awaitingServiceResult = false;
+        this._isAdjusting = false;
+        this._commitArmed = false;
+        this._showHoldSlider = false;
+        if (this._inputEl) {
+          this._inputEl.readOnly = false;
+          this._inputEl.classList.remove('no-select');
         }
-        return;
-      }
-
-      const valueChanged = this._value !== num;
-      this._value = num;
-      if (attrsChanged) {
         this._render();
-      } else if (valueChanged && !inputFocused) {
-        this._renderValueOnly();
+        if (this._refocusAfterCommit) {
+          this._refocusAfterCommit = false;
+          requestAnimationFrame(() => {
+            try { this._inputEl?.focus({ preventScroll: true }); } catch (_) { this._inputEl?.focus(); }
+          });
+        }
       }
+      return;
+    }
+
+    const valueChanged = this._value !== currentValue;
+    this._value = currentValue;
+    if (attrsChanged) {
+      this._render();
+    } else if (valueChanged && !inputFocused) {
+      this._renderValueOnly();
     }
   }
 
   getCardSize() {
     const rows = Number(this._config?.grid_options?.rows);
     return (Number.isFinite(rows) && rows > 0) ? rows : 1;
+  }
+
+  _getEntityType() {
+    if (!this._config?.entity) return 'input_number';
+    if (this._config.entity.startsWith('input_datetime.')) return 'input_datetime';
+    if (this._config.entity.startsWith('input_select.')) return 'input_select';
+    return 'input_number';
   }
 
   _notifyResize() {
@@ -175,6 +214,25 @@ class InputNumberSliderComboCard extends HTMLElement {
     return this._entity?.attributes?.unit_of_measurement || '';
   }
 
+  _getSelectOptions() {
+    return this._entity?.attributes?.options || [];
+  }
+
+  _parseTimeValue(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return { hours: 0, minutes: 0 };
+    const parts = timeStr.split(':');
+    return {
+      hours: parseInt(parts[0]) || 0,
+      minutes: parseInt(parts[1]) || 0
+    };
+  }
+
+  _formatTimeValue(hours, minutes) {
+    const h = String(hours).padStart(2, '0');
+    const m = String(minutes).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+
   _getStepDecimals() {
     const step = this._getStep();
     if (!Number.isFinite(step)) return 0;
@@ -184,21 +242,49 @@ class InputNumberSliderComboCard extends HTMLElement {
   }
 
   _formatValueForDisplay() {
-    const value = Number(this._value);
-    if (!Number.isFinite(value)) return '';
-    const decimals = this._getStepDecimals();
-    return decimals > 0 ? value.toFixed(decimals) : String(value);
+    const entityType = this._getEntityType();
+    
+    if (entityType === 'input_number') {
+      const value = Number(this._value);
+      if (!Number.isFinite(value)) return '';
+      const decimals = this._getStepDecimals();
+      return decimals > 0 ? value.toFixed(decimals) : String(value);
+    } else if (entityType === 'input_datetime') {
+      return String(this._value || '00:00');
+    } else if (entityType === 'input_select') {
+      return String(this._value || '');
+    }
+    
+    return String(this._value || '');
   }
 
   _callSetValue(newValue) {
     if (!this._hass || !this._config) return;
-    const value = this._clampToRange(this._roundToStep(newValue));
-    this._value = value;
-    this._renderValueOnly();
-    this._hass.callService('input_number', 'set_value', {
-      entity_id: this._config.entity,
-      value,
-    });
+    const entityType = this._getEntityType();
+    
+    if (entityType === 'input_number') {
+      const value = this._clampToRange(this._roundToStep(newValue));
+      this._value = value;
+      this._renderValueOnly();
+      this._hass.callService('input_number', 'set_value', {
+        entity_id: this._config.entity,
+        value,
+      });
+    } else if (entityType === 'input_datetime') {
+      this._value = newValue;
+      this._renderValueOnly();
+      this._hass.callService('input_datetime', 'set_datetime', {
+        entity_id: this._config.entity,
+        time: newValue,
+      });
+    } else if (entityType === 'input_select') {
+      this._value = newValue;
+      this._renderValueOnly();
+      this._hass.callService('input_select', 'select_option', {
+        entity_id: this._config.entity,
+        option: newValue,
+      });
+    }
   }
 
   _roundToStep(value) {
@@ -214,11 +300,18 @@ class InputNumberSliderComboCard extends HTMLElement {
   }
 
   _onInputCommit(e) {
-    const parsed = Number(e.currentTarget.value);
-    if (!Number.isNaN(parsed)) {
-      this._callSetValue(parsed);
-    } else {
-      this._render();
+    const entityType = this._getEntityType();
+    const value = e.currentTarget.value;
+    
+    if (entityType === 'input_number') {
+      const parsed = Number(value);
+      if (!Number.isNaN(parsed)) {
+        this._callSetValue(parsed);
+      } else {
+        this._render();
+      }
+    } else if (entityType === 'input_datetime' || entityType === 'input_select') {
+      this._callSetValue(value);
     }
   }
 
@@ -230,16 +323,57 @@ class InputNumberSliderComboCard extends HTMLElement {
     }
   }
 
+  _onTimeSliderInput(e) {
+    const val = Number(e.currentTarget.value);
+    if (!Number.isNaN(val) && this._timeComponent) {
+      const { hours, minutes } = this._parseTimeValue(this._value);
+      let newHours = hours;
+      let newMinutes = minutes;
+      
+      if (this._timeComponent === 'hours') {
+        newHours = val;
+      } else if (this._timeComponent === 'minutes') {
+        newMinutes = val;
+      }
+      
+      this._value = this._formatTimeValue(newHours, newMinutes);
+      this._renderValueOnly();
+    }
+  }
+
+  _onSelectSliderInput(e) {
+    const val = Number(e.currentTarget.value);
+    if (!Number.isNaN(val)) {
+      const options = this._getSelectOptions();
+      const index = Math.max(0, Math.min(options.length - 1, val));
+      const newValue = options[index];
+      if (newValue && newValue !== this._value) {
+        this._value = newValue;
+        this._renderValueOnly();
+      }
+    }
+  }
+
   _startHold(e) {
     this._cancelHold();
     this._holdStartX = e.clientX;
-    this._holdStartValue = this._value ?? 0;
+    const entityType = this._getEntityType();
+    
+    if (entityType === 'input_select') {
+      const options = this._getSelectOptions();
+      const currentIndex = options.indexOf(this._value);
+      this._holdStartValue = currentIndex >= 0 ? currentIndex : 0;
+    } else {
+      this._holdStartValue = this._value ?? 0;
+    }
+    
     this._attachGlobalPointer();
     this._isPressing = true;
     this._holdTimer = setTimeout(() => {
       this._isAdjusting = true;
       this._commitArmed = false;
-      this._showHoldSlider = !!this._config.show_hold_slider;
+      // Hold slider works for input_number and input_select
+      this._showHoldSlider = !!this._config.show_hold_slider && (entityType === 'input_number' || entityType === 'input_select');
       this._render();
       if (this._inputEl) {
         try { this._inputEl.blur(); } catch (_) {}
@@ -250,26 +384,101 @@ class InputNumberSliderComboCard extends HTMLElement {
     }, 350);
   }
 
+  _startTimeHold(e, component) {
+    this._cancelHold();
+    this._holdStartX = e.clientX;
+    const { hours, minutes } = this._parseTimeValue(this._value);
+    this._holdStartValue = component === 'hours' ? hours : minutes;
+    this._timeComponent = component;
+    this._attachGlobalPointer();
+    this._isPressing = true;
+    this._holdTimer = setTimeout(() => {
+      this._isAdjusting = true;
+      this._commitArmed = false;
+      // Show hold slider for time components if enabled
+      this._showHoldSlider = !!this._config.show_hold_slider;
+      this._render();
+      const targetInput = this.shadowRoot?.querySelector(`.${component}-input`);
+      if (targetInput) {
+        try { targetInput.blur(); } catch (_) {}
+        targetInput.readOnly = true;
+        targetInput.classList.add('no-select');
+      }
+      window.addEventListener('keydown', this._onKeydown, true);
+    }, 350);
+  }
+
   _moveHold(e) {
     if (!this._isAdjusting) return;
     if (e.cancelable) e.preventDefault();
     
-    const card = this.shadowRoot.querySelector('ha-card');
-    const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
-    const width = rect?.width > 0 ? rect.width : 1;
-    const min = this._getMin();
-    const max = this._getMax();
-    const step = this._getStep();
-    const stepsCount = Math.max(1, Math.round((max - min) / step));
-    const pixelsPerStep = width / stepsCount;
-    const deltaX = e.clientX - this._holdStartX;
-    const deltaSteps = Math.round(deltaX / pixelsPerStep);
-    const candidate = this._holdStartValue + deltaSteps * step;
-    const clamped = this._clampToRange(this._roundToStep(candidate));
+    const entityType = this._getEntityType();
     
-    if (clamped !== this._value) {
-      this._value = clamped;
-      this._renderValueOnly();
+    if (entityType === 'input_number') {
+      const card = this.shadowRoot.querySelector('ha-card');
+      const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
+      const width = rect?.width > 0 ? rect.width : 1;
+      const min = this._getMin();
+      const max = this._getMax();
+      const step = this._getStep();
+      const stepsCount = Math.max(1, Math.round((max - min) / step));
+      const pixelsPerStep = width / stepsCount;
+      const deltaX = e.clientX - this._holdStartX;
+      const deltaSteps = Math.round(deltaX / pixelsPerStep);
+      const candidate = this._holdStartValue + deltaSteps * step;
+      const clamped = this._clampToRange(this._roundToStep(candidate));
+      
+      if (clamped !== this._value) {
+        this._value = clamped;
+        this._renderValueOnly();
+      }
+    } else if (entityType === 'input_datetime' && this._timeComponent) {
+      const card = this.shadowRoot.querySelector('ha-card');
+      const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
+      const width = rect?.width > 0 ? rect.width : 1;
+      const deltaX = e.clientX - this._holdStartX;
+      
+      const { hours, minutes } = this._parseTimeValue(this._value);
+      let newHours = hours;
+      let newMinutes = minutes;
+      
+      if (this._timeComponent === 'hours') {
+        const maxSteps = 23;
+        const pixelsPerStep = width / maxSteps;
+        const deltaSteps = Math.round(deltaX / pixelsPerStep);
+        newHours = Math.max(0, Math.min(23, this._holdStartValue + deltaSteps));
+      } else if (this._timeComponent === 'minutes') {
+        const maxSteps = 59;
+        const pixelsPerStep = width / maxSteps;
+        const deltaSteps = Math.round(deltaX / pixelsPerStep);
+        newMinutes = Math.max(0, Math.min(59, this._holdStartValue + deltaSteps));
+      }
+      
+      const newTimeValue = this._formatTimeValue(newHours, newMinutes);
+      if (newTimeValue !== this._value) {
+        this._value = newTimeValue;
+        this._renderValueOnly();
+      }
+    } else if (entityType === 'input_select') {
+      const options = this._getSelectOptions();
+      if (options.length === 0) return;
+      
+      const card = this.shadowRoot.querySelector('ha-card');
+      const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
+      const width = rect?.width > 0 ? rect.width : 1;
+      const deltaX = e.clientX - this._holdStartX;
+      
+      // Calculate discrete steps - each option gets equal pixel space
+      const totalSteps = Math.max(1, options.length - 1);
+      const pixelsPerStep = width / totalSteps;
+      const deltaSteps = Math.round(deltaX / pixelsPerStep);
+      const newIndex = Math.max(0, Math.min(options.length - 1, this._holdStartValue + deltaSteps));
+      const newValue = options[newIndex];
+      
+      if (newValue !== this._value) {
+        this._value = newValue;
+        this._renderValueOnly();
+      }
     }
   }
 
@@ -280,14 +489,21 @@ class InputNumberSliderComboCard extends HTMLElement {
     }
     if (this._isAdjusting) {
       this._commitArmed = true;
-      if (this._config?.show_hold_slider) {
-        this._confirmAdjust(false);
-        return;
-      }
+      // Always confirm adjust when releasing hold, regardless of show_hold_slider setting
+      this._confirmAdjust(false);
+      return;
     }
     this._detachGlobalPointer();
     if (this._inputEl && !this._isAdjusting) {
-      this._inputEl.readOnly = false;
+      const entityType = this._getEntityType();
+      if (entityType === 'input_number') {
+        this._inputEl.readOnly = false;
+      } else if (entityType === 'input_datetime') {
+        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
+        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
+        if (hoursInput) hoursInput.readOnly = false;
+        if (minutesInput) minutesInput.readOnly = false;
+      }
     }
     this._isPressing = false;
     if (this._isAdjusting && this._config?.show_hold_slider) {
@@ -302,7 +518,15 @@ class InputNumberSliderComboCard extends HTMLElement {
     }
     this._detachGlobalPointer();
     if (this._inputEl && !this._isAdjusting) {
-      this._inputEl.classList.remove('no-select');
+      const entityType = this._getEntityType();
+      if (entityType === 'input_number') {
+        this._inputEl.classList.remove('no-select');
+      } else if (entityType === 'input_datetime') {
+        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
+        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
+        if (hoursInput) hoursInput.classList.remove('no-select');
+        if (minutesInput) minutesInput.classList.remove('no-select');
+      }
     }
     this._isPressing = false;
   }
@@ -315,9 +539,24 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._isAdjusting = false;
     this._commitArmed = false;
     this._showHoldSlider = false;
+    this._timeComponent = null;
     if (this._inputEl) {
-      this._inputEl.readOnly = false;
-      this._inputEl.classList.remove('no-select');
+      const entityType = this._getEntityType();
+      if (entityType === 'input_number') {
+        this._inputEl.readOnly = false;
+        this._inputEl.classList.remove('no-select');
+      } else if (entityType === 'input_datetime') {
+        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
+        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
+        if (hoursInput) {
+          hoursInput.readOnly = false;
+          hoursInput.classList.remove('no-select');
+        }
+        if (minutesInput) {
+          minutesInput.readOnly = false;
+          minutesInput.classList.remove('no-select');
+        }
+      }
     }
     this._refocusAfterCommit = !!refocus;
     window.removeEventListener('click', this._onGlobalClick, true);
@@ -336,8 +575,22 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._awaitingServiceResult = false;
     this._showHoldSlider = false;
     if (this._inputEl) {
-      this._inputEl.readOnly = false;
-      this._inputEl.classList.remove('no-select');
+      const entityType = this._getEntityType();
+      if (entityType === 'input_number') {
+        this._inputEl.readOnly = false;
+        this._inputEl.classList.remove('no-select');
+      } else if (entityType === 'input_datetime') {
+        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
+        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
+        if (hoursInput) {
+          hoursInput.readOnly = false;
+          hoursInput.classList.remove('no-select');
+        }
+        if (minutesInput) {
+          minutesInput.readOnly = false;
+          minutesInput.classList.remove('no-select');
+        }
+      }
     }
     window.removeEventListener('click', this._onGlobalClick, true);
     window.removeEventListener('keydown', this._onKeydown, true);
@@ -357,16 +610,62 @@ class InputNumberSliderComboCard extends HTMLElement {
   }
 
   _renderValueOnly() {
-    const haTf = this.shadowRoot?.querySelector('ha-textfield');
-    if (haTf) {
-      haTf.value = String(this._value ?? '');
-      try { haTf.setAttribute('suffix', this._getUnit()); } catch (_) {}
-    }
-    const slider = this.shadowRoot?.querySelector('input[type="range"]');
-    if (slider) slider.value = String(this._value ?? '');
-    const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
-    if (overlayVal) {
-      overlayVal.textContent = `${this._formatValueForDisplay()} ${this._getUnit()}`.trim();
+    const entityType = this._getEntityType();
+    
+    if (entityType === 'input_number') {
+      const haTf = this.shadowRoot?.querySelector('ha-textfield');
+      if (haTf) {
+        haTf.value = String(this._value ?? '');
+        try { haTf.setAttribute('suffix', this._getUnit()); } catch (_) {}
+      }
+      const slider = this.shadowRoot?.querySelector('input[type="range"]');
+      if (slider) slider.value = String(this._value ?? '');
+      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
+      if (overlayVal) {
+        overlayVal.textContent = `${this._formatValueForDisplay()} ${this._getUnit()}`.trim();
+      }
+    } else if (entityType === 'input_datetime') {
+      const { hours, minutes } = this._parseTimeValue(this._value);
+      const hoursInput = this.shadowRoot?.querySelector('.hours-input');
+      const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
+      if (hoursInput) {
+        hoursInput.value = String(hours).padStart(2, '0');
+        try { hoursInput.setAttribute('suffix', 'h'); } catch (_) {}
+      }
+      if (minutesInput) {
+        minutesInput.value = String(minutes).padStart(2, '0');
+        try { minutesInput.setAttribute('suffix', 'm'); } catch (_) {}
+      }
+      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
+      if (overlayVal) {
+        overlayVal.textContent = this._formatTimeValue(hours, minutes);
+      }
+      // Update overlay slider if it exists
+      const overlaySlider = this.shadowRoot?.querySelector('.hold-slider-overlay input[type="range"]');
+      if (overlaySlider && this._timeComponent) {
+        if (this._timeComponent === 'hours') {
+          overlaySlider.value = String(hours);
+        } else if (this._timeComponent === 'minutes') {
+          overlaySlider.value = String(minutes);
+        }
+      }
+    } else if (entityType === 'input_select') {
+      const selectEl = this.shadowRoot?.querySelector('ha-select');
+      if (selectEl) {
+        selectEl.value = this._value || '';
+      }
+      // Update overlay slider if it exists
+      const overlaySlider = this.shadowRoot?.querySelector('.hold-slider-overlay input[type="range"]');
+      if (overlaySlider) {
+        const options = this._getSelectOptions();
+        const currentIndex = options.indexOf(this._value);
+        overlaySlider.value = String(currentIndex >= 0 ? currentIndex : 0);
+      }
+      // Update overlay value display
+      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
+      if (overlayVal) {
+        overlayVal.textContent = this._formatValueForDisplay();
+      }
     }
   }
 
@@ -380,6 +679,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     const unit = this._getUnit();
     const height = this._config?.height;
     const inputBg = this._config?.input_background;
+    const inputWidth = this._config?.input_width;
     const underlineThickness = this._config?.underline?.thickness;
     const underlineColor = this._config?.underline?.color;
 
@@ -392,7 +692,6 @@ class InputNumberSliderComboCard extends HTMLElement {
         grid-template-columns: auto 1fr auto;
         align-items: center;
         gap: 12px;
-        ${height ? `min-height: ${height};` : ''}
       }
       .icon { color: var(--state-icon-color); cursor: pointer; }
       .name {
@@ -419,8 +718,19 @@ class InputNumberSliderComboCard extends HTMLElement {
         ${underlineThickness ? `height: ${underlineThickness}; background: ${underlineColor}; opacity: 0.6;` : 'height: 0; background: transparent;'}
         pointer-events: none;
       }
+      .value-container:has(ha-select) .underline {
+        bottom: 8px;
+      }
       ha-textfield {
         ${inputBg ? `--mdc-text-field-fill-color: ${inputBg};` : ''}
+        ${inputWidth ? `width: ${inputWidth};` : ''}
+        ${height ? `--mdc-text-field-fill-height: ${height}; height: ${height};` : ''}
+      }
+      ha-select {
+        ${inputBg ? `--mdc-select-fill-color: ${inputBg}; --mdc-theme-surface: ${inputBg};` : ''}
+        ${inputWidth ? `width: ${inputWidth};` : ''}
+        ${height ? `--ha-select-height: ${height};` : ''}
+        min-width: 120px;
       }
       .hold-slider-overlay {
         position: absolute;
@@ -483,6 +793,34 @@ class InputNumberSliderComboCard extends HTMLElement {
         font-size: 12px;
         margin-top: 6px;
       }
+      .time-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .time-separator {
+        color: var(--primary-text-color);
+        font-size: 18px;
+        font-weight: bold;
+        margin: 0 4px;
+      }
+      .hours-input, .minutes-input {
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .hours-input, .minutes-input {
+        width: 75px !important;
+      }
+      .hours-input ha-textfield, .minutes-input ha-textfield {
+        width: 75px !important;
+        min-width: 75px;
+      }
+      .hours-input .mdc-text-field__affix--suffix,
+      .minutes-input .mdc-text-field__affix--suffix {
+        padding-left: 2px !important;
+        padding-right: 3px !important;
+        min-width: 8px !important;
+      }
     `;
 
     const card = document.createElement('ha-card');
@@ -510,31 +848,111 @@ class InputNumberSliderComboCard extends HTMLElement {
     const right = document.createElement('div');
     right.className = 'value-container';
 
-    // Input field
-    const tf = document.createElement('ha-textfield');
-    const hide = !!this._config?.hide_spinners;
-    tf.type = hide ? 'text' : 'number';
-    if (hide) {
-      tf.setAttribute('inputmode', 'decimal');
-      tf.style.width = '120px';
+    // Input field - different for each entity type
+    const entityType = this._getEntityType();
+    let inputContainer;
+    
+    if (entityType === 'input_number') {
+      const tf = document.createElement('ha-textfield');
+      const hide = !!this._config?.hide_spinners;
+      tf.type = hide ? 'text' : 'number';
+      if (hide) {
+        tf.setAttribute('inputmode', 'decimal');
+        tf.style.width = '120px';
+      }
+      tf.value = String(this._value ?? '');
+      tf.setAttribute('suffix', unit);
+      tf.setAttribute('min', String(min));
+      tf.setAttribute('max', String(max));
+      tf.setAttribute('step', String(step));
+      if (height) {
+        tf.style.setProperty('--mdc-text-field-fill-height', height);
+        tf.style.height = height;
+      }
+      tf.addEventListener('change', () => this._onInputCommit({ currentTarget: { value: tf.value } }));
+      tf.addEventListener('pointerdown', (ev) => this._startHold(ev));
+      this._inputEl = tf;
+      inputContainer = tf;
+    } else if (entityType === 'input_datetime') {
+      const timeContainer = document.createElement('div');
+      timeContainer.className = 'time-container';
+      
+      const { hours, minutes } = this._parseTimeValue(this._value);
+      
+      const hoursInput = document.createElement('ha-textfield');
+      hoursInput.className = 'hours-input';
+      hoursInput.type = 'text';
+      hoursInput.setAttribute('inputmode', 'numeric');
+      hoursInput.value = String(hours).padStart(2, '0');
+      hoursInput.setAttribute('suffix', 'h');
+      hoursInput.style.width = '75px';
+      if (height) {
+        hoursInput.style.setProperty('--mdc-text-field-fill-height', height);
+        hoursInput.style.height = height;
+      }
+      
+      const separator = document.createElement('span');
+      separator.textContent = ':';
+      separator.className = 'time-separator';
+      
+      const minutesInput = document.createElement('ha-textfield');
+      minutesInput.className = 'minutes-input';
+      minutesInput.type = 'text';
+      minutesInput.setAttribute('inputmode', 'numeric');
+      minutesInput.value = String(minutes).padStart(2, '0');
+      minutesInput.setAttribute('suffix', 'm');
+      minutesInput.style.width = '70px';
+      if (height) {
+        minutesInput.style.setProperty('--mdc-text-field-fill-height', height);
+        minutesInput.style.height = height;
+      }
+      
+      const commitTime = () => {
+        const h = Math.max(0, Math.min(23, parseInt(hoursInput.value) || 0));
+        const m = Math.max(0, Math.min(59, parseInt(minutesInput.value) || 0));
+        // Update display with validated values
+        hoursInput.value = String(h).padStart(2, '0');
+        minutesInput.value = String(m).padStart(2, '0');
+        this._onInputCommit({ currentTarget: { value: this._formatTimeValue(h, m) } });
+      };
+      
+      hoursInput.addEventListener('change', commitTime);
+      minutesInput.addEventListener('change', commitTime);
+      hoursInput.addEventListener('pointerdown', (ev) => this._startTimeHold(ev, 'hours'));
+      minutesInput.addEventListener('pointerdown', (ev) => this._startTimeHold(ev, 'minutes'));
+      
+      timeContainer.appendChild(hoursInput);
+      timeContainer.appendChild(separator);
+      timeContainer.appendChild(minutesInput);
+      
+      this._inputEl = timeContainer;
+      inputContainer = timeContainer;
+    } else if (entityType === 'input_select') {
+      const selectEl = document.createElement('ha-select');
+      selectEl.value = this._value || '';
+      
+      const options = this._getSelectOptions();
+      options.forEach(option => {
+        const item = document.createElement('mwc-list-item');
+        item.value = option;
+        item.textContent = option;
+        selectEl.appendChild(item);
+      });
+      
+      selectEl.addEventListener('selected', (ev) => {
+        const selectedValue = ev.target.value;
+        this._onInputCommit({ currentTarget: { value: selectedValue } });
+      });
+      selectEl.addEventListener('pointerdown', (ev) => this._startHold(ev));
+      
+      this._inputEl = selectEl;
+      inputContainer = selectEl;
     }
-    tf.value = String(this._value ?? '');
-    tf.setAttribute('suffix', unit);
-    tf.setAttribute('min', String(min));
-    tf.setAttribute('max', String(max));
-    tf.setAttribute('step', String(step));
-    if (height) {
-      tf.style.setProperty('--mdc-text-field-fill-height', height);
-      tf.style.height = height;
-    }
-    tf.addEventListener('change', () => this._onInputCommit({ currentTarget: { value: tf.value } }));
-    tf.addEventListener('pointerdown', (ev) => this._startHold(ev));
-    this._inputEl = tf;
 
     const underline = document.createElement('div');
     underline.className = 'underline';
 
-    right.appendChild(tf);
+    right.appendChild(inputContainer);
     right.appendChild(underline);
 
     // Confirmation click handler
@@ -559,24 +977,66 @@ class InputNumberSliderComboCard extends HTMLElement {
       }
     };
     right.addEventListener('click', confirmHandler, { capture: true });
-    tf.addEventListener('click', confirmHandler, { capture: true });
+    inputContainer.addEventListener('click', confirmHandler, { capture: true });
 
     // Hold slider overlay
     if (this._showHoldSlider) {
       const overlay = document.createElement('div');
       overlay.className = 'hold-slider-overlay';
-      const slider = document.createElement('input');
-      slider.type = 'range';
-      slider.min = String(min);
-      slider.max = String(max);
-      slider.step = String(step);
-      slider.value = String(this._value ?? '');
-      slider.addEventListener('input', (e) => this._onSliderInput(e));
-      overlay.appendChild(slider);
-      const overlayValue = document.createElement('span');
-      overlayValue.className = 'overlay-value';
-      overlayValue.textContent = `${this._formatValueForDisplay()} ${unit}`.trim();
-      overlay.appendChild(overlayValue);
+      
+      if (entityType === 'input_number') {
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = String(min);
+        slider.max = String(max);
+        slider.step = String(step);
+        slider.value = String(this._value ?? '');
+        slider.addEventListener('input', (e) => this._onSliderInput(e));
+        overlay.appendChild(slider);
+        const overlayValue = document.createElement('span');
+        overlayValue.className = 'overlay-value';
+        overlayValue.textContent = `${this._formatValueForDisplay()} ${unit}`.trim();
+        overlay.appendChild(overlayValue);
+      } else if (entityType === 'input_datetime' && this._timeComponent) {
+        // Show slider for the specific time component being adjusted
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        if (this._timeComponent === 'hours') {
+          slider.min = '0';
+          slider.max = '23';
+          slider.step = '1';
+          const { hours } = this._parseTimeValue(this._value);
+          slider.value = String(hours);
+        } else {
+          slider.min = '0';
+          slider.max = '59';
+          slider.step = '1';
+          const { minutes } = this._parseTimeValue(this._value);
+          slider.value = String(minutes);
+        }
+        slider.addEventListener('input', (e) => this._onTimeSliderInput(e));
+        overlay.appendChild(slider);
+        const overlayValue = document.createElement('span');
+        overlayValue.className = 'overlay-value';
+        overlayValue.textContent = this._formatValueForDisplay();
+        overlay.appendChild(overlayValue);
+      } else if (entityType === 'input_select') {
+        const options = this._getSelectOptions();
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = String(Math.max(0, options.length - 1));
+        slider.step = '1';
+        const currentIndex = options.indexOf(this._value);
+        slider.value = String(currentIndex >= 0 ? currentIndex : 0);
+        slider.addEventListener('input', (e) => this._onSelectSliderInput(e));
+        overlay.appendChild(slider);
+        const overlayValue = document.createElement('span');
+        overlayValue.className = 'overlay-value';
+        overlayValue.textContent = this._formatValueForDisplay();
+        overlay.appendChild(overlayValue);
+      }
+      
       card.appendChild(overlay);
     }
 
@@ -622,7 +1082,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'input-number-slider-combo-card',
   name: 'Input Number Slider Combo Card',
-  description: 'input_number card with hold-to-slide adjustment',
+  description: 'input_number, input_datetime, and input_select card with hold-to-slide adjustment',
   preview: false,
   documentationURL: HELP_URL,
 });
@@ -640,6 +1100,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
         show_hold_slider: false,
         underline: { thickness: undefined, color: 'var(--primary-color)' },
         name: undefined,
+        input_width: undefined,
         ...config,
       };
       this._ensureEditorDeps();
@@ -687,7 +1148,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       if (key === 'underline.thickness' || key === 'underline.color') {
         const [, sub] = key.split('.');
         this._config.underline = { ...this._config.underline, [sub]: value };
-      } else if (key === 'height' || key === 'input_background' || key === 'name') {
+      } else if (key === 'height' || key === 'input_background' || key === 'input_width' || key === 'name') {
         this._config[key] = value || undefined;
       }
       this._emitConfig(this._config);
@@ -715,7 +1176,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       const picker = document.createElement('ha-entity-picker');
       picker.hass = this._hass;
       picker.value = this._config.entity || '';
-      picker.includeDomains = ['input_number'];
+      picker.includeDomains = ['input_number', 'input_datetime', 'input_select'];
       picker.addEventListener('value-changed', (ev) => {
         this._config.entity = ev.detail.value || '';
         this._emitConfig(this._config);
@@ -737,6 +1198,14 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       height.dataset.key = 'height';
       height.addEventListener('change', (e) => this._onTextChange(e));
       root.appendChild(mkRow('Height', height));
+
+      // Width
+      const width = document.createElement('ha-textfield');
+      width.label = 'Width (e.g. 120px)';
+      width.value = this._config.input_width || '';
+      width.dataset.key = 'input_width';
+      width.addEventListener('change', (e) => this._onTextChange(e));
+      root.appendChild(mkRow('Width', width));
 
       // Input background
       const bg = document.createElement('ha-textfield');
