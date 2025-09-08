@@ -946,7 +946,7 @@ class InputNumberSliderComboCard extends HTMLElement {
         const numericWidth = parseInt(inputWidth);
         minutesInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
       } else {
-        minutesInput.style.width = '70px';
+        minutesInput.style.width = '75px';
       }
       if (height) {
         minutesInput.style.setProperty('--mdc-text-field-fill-height', height);
