@@ -2,8 +2,9 @@
 
 Custom Lovelace card for Home Assistant with **Long Press Slider** functionality for `input_number` entities.
 
-![Configuration](konfig.JPG)
-![Slider](slider.JPG)
+![slider](https://github.com/user-attachments/assets/db7fba9a-7d56-43de-abbe-86a9ac0f9d50)
+![konfig](https://github.com/user-attachments/assets/c327bbd4-44bb-41fb-b072-37b8eccf886a)
+
 
 ## Features
 - **Long Press Slider**: Hold the input field and slide left/right to adjust values
