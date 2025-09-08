@@ -27,6 +27,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._isPressing = false;
     this._refocusAfterCommit = false;
     this._timeComponent = null;
+    this._isEmbedded = false;
 
     this._onKeydown = (e) => {
       if (e.key === 'Escape') this._cancelAdjust(true);
@@ -54,8 +55,40 @@ class InputNumberSliderComboCard extends HTMLElement {
     return { entity: first || 'input_number.example', height: '30px' };
   }
 
+  connectedCallback() {
+    // Check embedding status when connected to DOM
+    setTimeout(() => this._checkEmbedding(), 0);
+  }
+
   disconnectedCallback() {
     this._detachGlobalPointer();
+  }
+
+  _checkEmbedding() {
+    const wasEmbedded = this._isEmbedded;
+    this._isEmbedded = this._isEmbeddedInEntitiesCard();
+    
+    // Re-render if embedding status changed
+    if (wasEmbedded !== this._isEmbedded && this._config) {
+      this._render();
+    }
+  }
+
+  _isEmbeddedInEntitiesCard() {
+    // Check if we're inside an entities card by looking for specific patterns
+    let parent = this.parentElement;
+    while (parent && parent !== document.body) {
+      // Check for entities card patterns
+      if (parent.tagName && (
+          parent.tagName.includes('ENTITIES') ||
+          parent.tagName === 'HUI-ENTITY-ROW' ||
+          (parent.className && parent.className.includes('entities'))
+      )) {
+        return true;
+      }
+      parent = parent.parentElement;
+    }
+    return false;
   }
 
   setConfig(config) {
@@ -174,6 +207,11 @@ class InputNumberSliderComboCard extends HTMLElement {
     return 'input_number';
   }
 
+  _isStandalone() {
+    // Use cached embedding status
+    return !this._isEmbedded;
+  }
+
   _notifyResize() {
     try {
       this.dispatchEvent(new Event('ll-rebuild', { bubbles: true, composed: true }));
@@ -185,11 +223,11 @@ class InputNumberSliderComboCard extends HTMLElement {
     if (Number.isFinite(rows) && rows > 0) {
       this.style.gridRow = `span ${rows}`;
       this.style.setProperty('--dashboard-card-span', rows);
-      const card = this.shadowRoot?.querySelector('ha-card');
-      if (card) {
-        card.style.gridRow = `span ${rows}`;
-        card.style.minHeight = 'unset';
-        card.style.height = 'auto';
+      const container = this.shadowRoot?.querySelector(this._isStandalone() ? 'ha-card' : 'div');
+      if (container) {
+        container.style.gridRow = `span ${rows}`;
+        container.style.minHeight = 'unset';
+        container.style.height = 'auto';
       }
     }
   }
@@ -415,8 +453,8 @@ class InputNumberSliderComboCard extends HTMLElement {
     const entityType = this._getEntityType();
     
     if (entityType === 'input_number') {
-      const card = this.shadowRoot.querySelector('ha-card');
-      const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
+      const container = this.shadowRoot.querySelector(this._isStandalone() ? 'ha-card' : 'div');
+      const rect = (container ? container.getBoundingClientRect() : this.getBoundingClientRect());
       const width = rect?.width > 0 ? rect.width : 1;
       const min = this._getMin();
       const max = this._getMax();
@@ -433,8 +471,8 @@ class InputNumberSliderComboCard extends HTMLElement {
         this._renderValueOnly();
       }
     } else if (entityType === 'input_datetime' && this._timeComponent) {
-      const card = this.shadowRoot.querySelector('ha-card');
-      const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
+      const container = this.shadowRoot.querySelector(this._isStandalone() ? 'ha-card' : 'div');
+      const rect = (container ? container.getBoundingClientRect() : this.getBoundingClientRect());
       const width = rect?.width > 0 ? rect.width : 1;
       const deltaX = e.clientX - this._holdStartX;
       
@@ -463,8 +501,8 @@ class InputNumberSliderComboCard extends HTMLElement {
       const options = this._getSelectOptions();
       if (options.length === 0) return;
       
-      const card = this.shadowRoot.querySelector('ha-card');
-      const rect = (card ? card.getBoundingClientRect() : this.getBoundingClientRect());
+      const container = this.shadowRoot.querySelector(this._isStandalone() ? 'ha-card' : 'div');
+      const rect = (container ? container.getBoundingClientRect() : this.getBoundingClientRect());
       const width = rect?.width > 0 ? rect.width : 1;
       const deltaX = e.clientX - this._holdStartX;
       
@@ -683,10 +721,12 @@ class InputNumberSliderComboCard extends HTMLElement {
     const underlineThickness = this._config?.underline?.thickness;
     const underlineColor = this._config?.underline?.color;
 
+    // Default to no ha-card wrapper (Home Assistant standard)
+    const useHaCard = this._isStandalone();
     const style = document.createElement('style');
     style.textContent = `
       :host { display: block; }
-      ha-card { padding: 12px 16px; }
+      ${useHaCard ? 'ha-card { padding: 12px 16px; }' : ''}
       .row {
         display: grid;
         grid-template-columns: auto 1fr auto;
@@ -823,7 +863,7 @@ class InputNumberSliderComboCard extends HTMLElement {
       }
     `;
 
-    const card = document.createElement('ha-card');
+    const container = useHaCard ? document.createElement('ha-card') : document.createElement('div');
     const row = document.createElement('div');
     row.className = 'row';
 
@@ -1037,25 +1077,25 @@ class InputNumberSliderComboCard extends HTMLElement {
         overlay.appendChild(overlayValue);
       }
       
-      card.appendChild(overlay);
+      container.appendChild(overlay);
     }
 
     row.appendChild(iconWrap);
     row.appendChild(left);
     row.appendChild(right);
-    card.appendChild(row);
+    container.appendChild(row);
 
     // Entity not found help
     if (!entity) {
       const help = document.createElement('div');
       help.className = 'help';
       help.textContent = 'Entity not found. Check entity id in card config.';
-      card.appendChild(help);
+      container.appendChild(help);
     }
 
     this.shadowRoot.innerHTML = '';
     this.shadowRoot.appendChild(style);
-    this.shadowRoot.appendChild(card);
+    this.shadowRoot.appendChild(container);
   }
 
   _attrsSignature(entity) {
@@ -1248,6 +1288,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
         this._emitConfig(this._config);
       });
       root.appendChild(mkRow('Hide spinners', hide));
+
 
       this.appendChild(root);
     }
