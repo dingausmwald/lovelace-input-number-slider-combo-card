@@ -848,13 +848,6 @@ class InputNumberSliderComboCard extends HTMLElement {
         text-align: center;
         flex-shrink: 0;
       }
-      .hours-input, .minutes-input {
-        width: 75px !important;
-      }
-      .hours-input ha-textfield, .minutes-input ha-textfield {
-        width: 75px !important;
-        min-width: 75px;
-      }
       .hours-input .mdc-text-field__affix--suffix,
       .minutes-input .mdc-text-field__affix--suffix {
         padding-left: 2px !important;
@@ -909,6 +902,9 @@ class InputNumberSliderComboCard extends HTMLElement {
         tf.style.setProperty('--mdc-text-field-fill-height', height);
         tf.style.height = height;
       }
+      if (inputWidth) {
+        tf.style.width = inputWidth;
+      }
       tf.addEventListener('change', () => this._onInputCommit({ currentTarget: { value: tf.value } }));
       tf.addEventListener('pointerdown', (ev) => this._startHold(ev));
       this._inputEl = tf;
@@ -925,7 +921,12 @@ class InputNumberSliderComboCard extends HTMLElement {
       hoursInput.setAttribute('inputmode', 'numeric');
       hoursInput.value = String(hours).padStart(2, '0');
       hoursInput.setAttribute('suffix', 'h');
-      hoursInput.style.width = '75px';
+      if (inputWidth) {
+        const numericWidth = parseInt(inputWidth);
+        hoursInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
+      } else {
+        hoursInput.style.width = '75px';
+      }
       if (height) {
         hoursInput.style.setProperty('--mdc-text-field-fill-height', height);
         hoursInput.style.height = height;
@@ -941,7 +942,12 @@ class InputNumberSliderComboCard extends HTMLElement {
       minutesInput.setAttribute('inputmode', 'numeric');
       minutesInput.value = String(minutes).padStart(2, '0');
       minutesInput.setAttribute('suffix', 'm');
-      minutesInput.style.width = '70px';
+      if (inputWidth) {
+        const numericWidth = parseInt(inputWidth);
+        minutesInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
+      } else {
+        minutesInput.style.width = '70px';
+      }
       if (height) {
         minutesInput.style.setProperty('--mdc-text-field-fill-height', height);
         minutesInput.style.height = height;
