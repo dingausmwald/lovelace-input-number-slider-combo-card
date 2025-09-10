@@ -49,9 +49,11 @@ class InputNumberSliderComboCard extends HTMLElement {
 
   static getStubConfig(hass) {
     const inputNumber = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_number.'));
+    const number = Object.keys(hass?.states || {}).find((e) => e.startsWith('number.'));
     const inputDatetime = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_datetime.'));
     const inputSelect = Object.keys(hass?.states || {}).find((e) => e.startsWith('input_select.'));
-    const first = inputNumber || inputDatetime || inputSelect;
+    const select = Object.keys(hass?.states || {}).find((e) => e.startsWith('select.'));
+    const first = inputNumber || number || inputDatetime || inputSelect || select;
     return { entity: first || 'input_number.example', height: '30px' };
   }
 
@@ -94,9 +96,9 @@ class InputNumberSliderComboCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error('invalid config');
     if (config.entity && typeof config.entity === 'string') {
-      const validPrefixes = ['input_number.', 'input_datetime.', 'input_select.'];
+      const validPrefixes = ['input_number.', 'number.', 'input_datetime.', 'input_select.', 'select.'];
       if (!validPrefixes.some(prefix => config.entity.startsWith(prefix))) {
-        throw new Error('entity must be an input_number.*, input_datetime.*, or input_select.*');
+        throw new Error('entity must be an input_number.*, number.*, input_datetime.*, input_select.*, or select.*');
       }
     }
 
@@ -204,6 +206,8 @@ class InputNumberSliderComboCard extends HTMLElement {
     if (!this._config?.entity) return 'input_number';
     if (this._config.entity.startsWith('input_datetime.')) return 'input_datetime';
     if (this._config.entity.startsWith('input_select.')) return 'input_select';
+    if (this._config.entity.startsWith('select.')) return 'input_select';
+    if (this._config.entity.startsWith('number.')) return 'input_number';
     return 'input_number';
   }
 
@@ -304,10 +308,19 @@ class InputNumberSliderComboCard extends HTMLElement {
       const value = this._clampToRange(this._roundToStep(newValue));
       this._value = value;
       this._renderValueOnly();
-      this._hass.callService('input_number', 'set_value', {
-        entity_id: this._config.entity,
-        value,
-      });
+      
+      // Use appropriate service based on entity prefix
+      if (this._config.entity.startsWith('number.')) {
+        this._hass.callService('number', 'set_value', {
+          entity_id: this._config.entity,
+          value,
+        });
+      } else {
+        this._hass.callService('input_number', 'set_value', {
+          entity_id: this._config.entity,
+          value,
+        });
+      }
     } else if (entityType === 'input_datetime') {
       this._value = newValue;
       this._renderValueOnly();
@@ -318,10 +331,19 @@ class InputNumberSliderComboCard extends HTMLElement {
     } else if (entityType === 'input_select') {
       this._value = newValue;
       this._renderValueOnly();
-      this._hass.callService('input_select', 'select_option', {
-        entity_id: this._config.entity,
-        option: newValue,
-      });
+      
+      // Use appropriate service based on entity prefix
+      if (this._config.entity.startsWith('select.')) {
+        this._hass.callService('select', 'select_option', {
+          entity_id: this._config.entity,
+          option: newValue,
+        });
+      } else {
+        this._hass.callService('input_select', 'select_option', {
+          entity_id: this._config.entity,
+          option: newValue,
+        });
+      }
     }
   }
 
@@ -1127,7 +1149,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'input-number-slider-combo-card',
   name: 'Input Number Slider Combo Card',
-  description: 'input_number, input_datetime, and input_select card with hold-to-slide adjustment',
+  description: 'input_number, number, input_datetime, input_select, and select card with hold-to-slide adjustment',
   preview: false,
   documentationURL: HELP_URL,
 });
@@ -1221,7 +1243,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       const picker = document.createElement('ha-entity-picker');
       picker.hass = this._hass;
       picker.value = this._config.entity || '';
-      picker.includeDomains = ['input_number', 'input_datetime', 'input_select'];
+      picker.includeDomains = ['input_number', 'number', 'input_datetime', 'input_select', 'select'];
       picker.addEventListener('value-changed', (ev) => {
         this._config.entity = ev.detail.value || '';
         this._emitConfig(this._config);
