@@ -329,9 +329,6 @@ class InputNumberSliderComboCard extends HTMLElement {
         time: newValue,
       });
     } else if (entityType === 'input_select') {
-      this._value = newValue;
-      this._renderValueOnly();
-      
       // Use appropriate service based on entity prefix
       if (this._config.entity.startsWith('select.')) {
         this._hass.callService('select', 'select_option', {
@@ -407,9 +404,12 @@ class InputNumberSliderComboCard extends HTMLElement {
       const options = this._getSelectOptions();
       const index = Math.max(0, Math.min(options.length - 1, val));
       const newValue = options[index];
-      if (newValue && newValue !== this._value) {
-        this._value = newValue;
-        this._renderValueOnly();
+      if (newValue) {
+        // Only update overlay display, don't change actual value until release
+        const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
+        if (overlayVal) {
+          overlayVal.textContent = newValue;
+        }
       }
     }
   }
@@ -535,9 +535,14 @@ class InputNumberSliderComboCard extends HTMLElement {
       const newIndex = Math.max(0, Math.min(options.length - 1, this._holdStartValue + deltaSteps));
       const newValue = options[newIndex];
       
-      if (newValue !== this._value) {
-        this._value = newValue;
-        this._renderValueOnly();
+      // Only update overlay display, don't change actual value until release
+      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
+      if (overlayVal && newValue) {
+        overlayVal.textContent = newValue;
+      }
+      const overlaySlider = this.shadowRoot?.querySelector('.hold-slider-overlay input[type="range"]');
+      if (overlaySlider) {
+        overlaySlider.value = String(newIndex);
       }
     }
   }
@@ -594,8 +599,21 @@ class InputNumberSliderComboCard extends HTMLElement {
   _confirmAdjust(refocus = true) {
     if (!(this._isAdjusting && this._commitArmed)) return;
     this._awaitingServiceResult = true;
-    this._lastSentValue = this._value;
-    this._callSetValue(this._value);
+    
+    // For select entities, get the final value from the overlay display
+    const entityType = this._getEntityType();
+    let finalValue = this._value;
+    if (entityType === 'input_select') {
+      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
+      if (overlayVal && overlayVal.textContent) {
+        finalValue = overlayVal.textContent;
+        // Update internal value so UI shows correct state
+        this._value = finalValue;
+      }
+    }
+    
+    this._lastSentValue = finalValue;
+    this._callSetValue(finalValue);
     this._isAdjusting = false;
     this._commitArmed = false;
     this._showHoldSlider = false;
