@@ -28,6 +28,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._refocusAfterCommit = false;
     this._timeComponent = null;
     this._isEmbedded = false;
+    this._rafIds = new Set();
 
     this._onKeydown = (e) => {
       if (e.key === 'Escape') this._cancelAdjust(true);
@@ -64,6 +65,7 @@ class InputNumberSliderComboCard extends HTMLElement {
 
   disconnectedCallback() {
     this._detachGlobalPointer();
+    this._cancelAllRafs();
   }
 
   _checkEmbedding() {
@@ -180,7 +182,7 @@ class InputNumberSliderComboCard extends HTMLElement {
         this._render();
         if (this._refocusAfterCommit) {
           this._refocusAfterCommit = false;
-          requestAnimationFrame(() => {
+          this._scheduleRaf(() => {
             try { this._inputEl?.focus({ preventScroll: true }); } catch (_) { this._inputEl?.focus(); }
           });
         }
@@ -349,7 +351,12 @@ class InputNumberSliderComboCard extends HTMLElement {
     const step = this._getStep();
     const steps = Math.round((value - min) / step);
     const rounded = min + steps * step;
-    return Number.isFinite(rounded) ? rounded : value;
+    
+    if (!Number.isFinite(rounded)) return value;
+    
+    // Fix floating point precision errors by rounding to step decimals
+    const decimals = this._getStepDecimals();
+    return decimals > 0 ? Number(rounded.toFixed(decimals)) : rounded;
   }
 
   _clampToRange(value) {
@@ -685,6 +692,19 @@ class InputNumberSliderComboCard extends HTMLElement {
     window.removeEventListener('pointermove', this._onPointerMove);
     window.removeEventListener('pointerup', this._onPointerUp);
     window.removeEventListener('pointercancel', this._onPointerUp);
+  }
+
+  _scheduleRaf(callback) {
+    const rafId = requestAnimationFrame(callback);
+    this._rafIds.add(rafId);
+    return rafId;
+  }
+
+  _cancelAllRafs() {
+    for (const rafId of this._rafIds) {
+      cancelAnimationFrame(rafId);
+    }
+    this._rafIds.clear();
   }
 
   _renderValueOnly() {
@@ -1052,13 +1072,15 @@ class InputNumberSliderComboCard extends HTMLElement {
         if (this._inputEl) {
           this._inputEl.readOnly = false;
           this._inputEl.classList.remove('no-select');
-          requestAnimationFrame(() => {
+          this._scheduleRaf(() => {
             try { this._inputEl.focus({ preventScroll: true }); } catch (_) { this._inputEl.focus(); }
           });
         }
         this._refocusAfterCommit = true;
       } else if (this._inputEl) {
-        try { this._inputEl.focus({ preventScroll: true }); } catch (_) { this._inputEl.focus(); }
+        this._scheduleRaf(() => {
+          try { this._inputEl.focus({ preventScroll: true }); } catch (_) { this._inputEl.focus(); }
+        });
       }
     };
     right.addEventListener('click', confirmHandler, { capture: true });
