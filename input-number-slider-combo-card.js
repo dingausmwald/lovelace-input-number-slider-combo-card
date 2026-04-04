@@ -60,12 +60,36 @@ class InputNumberSliderComboCard extends HTMLElement {
 
   connectedCallback() {
     // Check embedding status when connected to DOM
-    setTimeout(() => this._checkEmbedding(), 0);
+    setTimeout(() => {
+      this._checkEmbedding();
+      this._applyHostHeight();
+    }, 0);
   }
 
   disconnectedCallback() {
+    // Clean up all event listeners
     this._detachGlobalPointer();
+    this._detachGlobalClickListener();
+    this._detachKeydownListener();
+    
+    // Clean up timers
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+    
+    // Clean up RAF IDs
     this._cancelAllRafs();
+    
+    // Clear DOM references
+    this._inputEl = null;
+    
+    // Reset state
+    this._isAdjusting = false;
+    this._commitArmed = false;
+    this._awaitingServiceResult = false;
+    this._showHoldSlider = false;
+    this._isPressing = false;
   }
 
   _checkEmbedding() {
@@ -79,18 +103,23 @@ class InputNumberSliderComboCard extends HTMLElement {
   }
 
   _isEmbeddedInEntitiesCard() {
-    // Check if we're inside an entities card by looking for specific patterns
-    let parent = this.parentElement;
-    while (parent && parent !== document.body) {
-      // Check for entities card patterns
-      if (parent.tagName && (
-          parent.tagName.includes('ENTITIES') ||
-          parent.tagName === 'HUI-ENTITY-ROW' ||
-          (parent.className && parent.className.includes('entities'))
+    // Walk up the DOM, crossing shadow root boundaries via getRootNode().host
+    let node = this.parentElement;
+    while (node) {
+      if (node.tagName && (
+          node.tagName.includes('ENTITIES') ||
+          node.tagName === 'HUI-ENTITY-ROW' ||
+          (node.className && typeof node.className === 'string' && node.className.includes('entities'))
       )) {
         return true;
       }
-      parent = parent.parentElement;
+      if (node.parentElement) {
+        node = node.parentElement;
+      } else {
+        // Cross shadow root boundary
+        const root = node.getRootNode?.();
+        node = (root && root !== node && root !== document) ? root.host : null;
+      }
     }
     return false;
   }
@@ -115,14 +144,27 @@ class InputNumberSliderComboCard extends HTMLElement {
       ...config,
     };
 
+    // Default bare numbers to px
+    if (this._config.height && /^\d+(\.\d+)?$/.test(String(this._config.height))) {
+      this._config.height = this._config.height + 'px';
+    }
+    if (this._config.width && /^\d+(\.\d+)?$/.test(String(this._config.width))) {
+      this._config.width = this._config.width + 'px';
+    }
+
     const u = this._config.underline || {};
+    let thickness = typeof u.thickness === 'string' ? u.thickness : (typeof u.thickness === 'number' ? String(u.thickness) : undefined);
+    if (thickness && /^\d+(\.\d+)?$/.test(thickness)) {
+      thickness = thickness + 'px';
+    }
     this._config.underline = {
-      thickness: typeof u.thickness === 'string' ? u.thickness : undefined,
+      thickness,
       color: typeof u.color === 'string' ? u.color : 'var(--primary-color)',
     };
 
     this._render();
     this._applyGridOptions();
+    this._applyHostHeight();
     this._notifyResize();
   }
 
@@ -216,6 +258,9 @@ class InputNumberSliderComboCard extends HTMLElement {
   _isStandalone() {
     // Use cached embedding status
     return !this._isEmbedded;
+  }
+
+  _applyHostHeight() {
   }
 
   _notifyResize() {
@@ -447,7 +492,7 @@ class InputNumberSliderComboCard extends HTMLElement {
         this._inputEl.readOnly = true;
         this._inputEl.classList.add('no-select');
       }
-      window.addEventListener('keydown', this._onKeydown, true);
+      this._attachKeydownListener();
     }, 350);
   }
 
@@ -471,7 +516,7 @@ class InputNumberSliderComboCard extends HTMLElement {
         targetInput.readOnly = true;
         targetInput.classList.add('no-select');
       }
-      window.addEventListener('keydown', this._onKeydown, true);
+      this._attachKeydownListener();
     }, 350);
   }
 
@@ -579,7 +624,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     }
     this._isPressing = false;
     if (this._isAdjusting && this._config?.show_hold_slider) {
-      window.addEventListener('click', this._onGlobalClick, true);
+      this._attachGlobalClickListener();
     }
   }
 
@@ -644,8 +689,8 @@ class InputNumberSliderComboCard extends HTMLElement {
       }
     }
     this._refocusAfterCommit = !!refocus;
-    window.removeEventListener('click', this._onGlobalClick, true);
-    window.removeEventListener('keydown', this._onKeydown, true);
+    this._detachGlobalClickListener();
+    this._detachKeydownListener();
     this._render();
   }
 
@@ -677,8 +722,8 @@ class InputNumberSliderComboCard extends HTMLElement {
         }
       }
     }
-    window.removeEventListener('click', this._onGlobalClick, true);
-    window.removeEventListener('keydown', this._onKeydown, true);
+    this._detachGlobalClickListener();
+    this._detachKeydownListener();
     this._render();
   }
 
@@ -692,6 +737,26 @@ class InputNumberSliderComboCard extends HTMLElement {
     window.removeEventListener('pointermove', this._onPointerMove);
     window.removeEventListener('pointerup', this._onPointerUp);
     window.removeEventListener('pointercancel', this._onPointerUp);
+  }
+
+  _attachKeydownListener() {
+    // Prevent duplicate listeners by removing first
+    window.removeEventListener('keydown', this._onKeydown, true);
+    window.addEventListener('keydown', this._onKeydown, true);
+  }
+
+  _detachKeydownListener() {
+    window.removeEventListener('keydown', this._onKeydown, true);
+  }
+
+  _attachGlobalClickListener() {
+    // Prevent duplicate listeners by removing first
+    window.removeEventListener('click', this._onGlobalClick, true);
+    window.addEventListener('click', this._onGlobalClick, true);
+  }
+
+  _detachGlobalClickListener() {
+    window.removeEventListener('click', this._onGlobalClick, true);
   }
 
   _scheduleRaf(callback) {
@@ -711,7 +776,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     const entityType = this._getEntityType();
     
     if (entityType === 'input_number') {
-      const haTf = this.shadowRoot?.querySelector('ha-textfield');
+      const haTf = this.shadowRoot?.querySelector('ha-input');
       if (haTf) {
         haTf.value = String(this._value ?? '');
         try { haTf.setAttribute('suffix', this._getUnit()); } catch (_) {}
@@ -769,6 +834,9 @@ class InputNumberSliderComboCard extends HTMLElement {
 
   _render() {
     if (!this.shadowRoot) return;
+    
+    // Cancel any pending RAF callbacks before re-rendering to prevent memory leaks
+    this._cancelAllRafs();
     const entity = this._entity;
     const name = this._config?.name || entity?.attributes?.friendly_name || this._config?.entity || '';
     const min = this._getMin();
@@ -786,7 +854,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     const style = document.createElement('style');
     style.textContent = `
       :host { display: block; }
-      ${useHaCard ? 'ha-card { padding: 12px 16px; }' : ''}
+      ${useHaCard ? 'ha-card { padding: 12px 16px; --ha-card-border-width: 0; }' : ''}
       .row {
         display: grid;
         grid-template-columns: auto 1fr auto;
@@ -816,23 +884,21 @@ class InputNumberSliderComboCard extends HTMLElement {
         touch-action: pan-y;
       }
       .value-container::after {
-        ${underlineThickness && underlineThickness !== '0px' && underlineThickness !== '0' ? `content: ''; position: absolute; bottom: 0px; left: 0; right: 0; height: ${underlineThickness}; background: ${underlineColor}; border: none; box-shadow: none;` : ''}
+        ${underlineThickness && underlineThickness !== '0px' && underlineThickness !== '0' ? `content: ''; position: absolute; bottom: 0px; left: 0; right: 0; height: ${underlineThickness}; background: ${underlineColor}; border: none; box-shadow: none; z-index: 1;` : ''}
       }
-      ha-textfield {
-        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-text-field-idle-line-color: transparent !important; --mdc-text-field-hover-line-color: transparent !important; --mdc-text-field-focus-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-text-field-outlined-idle-border-color: transparent !important; --mdc-text-field-outlined-hover-border-color: transparent !important; --mdc-text-field-outlined-focused-border-color: transparent !important;' : ''}
-      }
-      ha-select {
-        ${underlineThickness === '0px' || underlineThickness === '0' ? '--mdc-select-idle-line-color: transparent !important; --mdc-select-hover-line-color: transparent !important; --mdc-select-focused-line-color: transparent !important; --mdc-notched-outline-border-color: transparent !important; --mdc-select-outlined-idle-border-color: transparent !important; --mdc-select-outlined-hover-border-color: transparent !important; --mdc-select-outlined-focused-border-color: transparent !important;' : ''}
-      }
-      ha-textfield {
-        ${inputBg ? `--mdc-text-field-fill-color: ${inputBg};` : ''}
+      ha-input {
+        --ha-input-padding-top: 0px;
+        --ha-input-padding-bottom: 0px;
+        ${underlineThickness === '0px' || underlineThickness === '0' ? '--ha-color-border-neutral-loud: transparent !important;' : ''}
+        ${inputBg ? `--ha-color-form-background: ${inputBg}; --ha-color-form-background-hover: ${inputBg};` : ''}
         ${inputWidth ? `width: ${inputWidth};` : ''}
-        ${height ? `--mdc-text-field-fill-height: ${height}; height: ${height};` : ''}
       }
+      ${height ? `ha-input::part(wa-base) { height: ${height}; }` : ''}
       ha-select {
-        ${inputBg ? `--mdc-select-fill-color: ${inputBg}; --mdc-theme-surface: ${inputBg};` : ''}
+        ${underlineThickness === '0px' || underlineThickness === '0' ? '--ha-color-border-neutral-loud: transparent !important;' : underlineThickness ? `--ha-color-border-neutral-loud: ${underlineColor} !important;` : ''}
+        ${inputBg ? `--ha-color-form-background: ${inputBg}; --ha-color-form-background-hover: ${inputBg};` : ''}
         ${inputWidth ? `width: ${inputWidth};` : ''}
-        ${height ? `--ha-select-height: ${height};` : ''}
+        ${height ? `height: ${height};` : ''}
         min-width: 120px;
       }
       .hold-slider-overlay {
@@ -949,24 +1015,21 @@ class InputNumberSliderComboCard extends HTMLElement {
     let inputContainer;
     
     if (entityType === 'input_number') {
-      const tf = document.createElement('ha-textfield');
+      const tf = document.createElement('ha-input');
       const hide = !!this._config?.hide_spinners;
       tf.type = hide ? 'text' : 'number';
       if (hide) {
         tf.setAttribute('inputmode', 'decimal');
-        tf.style.width = '120px';
       }
       tf.value = String(this._value ?? '');
-      tf.setAttribute('suffix', unit);
-      tf.setAttribute('min', String(min));
-      tf.setAttribute('max', String(max));
-      tf.setAttribute('step', String(step));
-      if (height) {
-        tf.style.setProperty('--mdc-text-field-fill-height', height);
-        tf.style.height = height;
-      }
+      tf.suffix = unit;
+      tf.min = min;
+      tf.max = max;
+      tf.step = step;
       if (inputWidth) {
         tf.style.width = inputWidth;
+      } else if (hide) {
+        tf.style.width = '94px';
       }
       tf.addEventListener('change', () => this._onInputCommit({ currentTarget: { value: tf.value } }));
       tf.addEventListener('pointerdown', (ev) => this._startHold(ev));
@@ -978,42 +1041,33 @@ class InputNumberSliderComboCard extends HTMLElement {
       
       const { hours, minutes } = this._parseTimeValue(this._value);
       
-      const hoursInput = document.createElement('ha-textfield');
+      const hoursInput = document.createElement('ha-input');
       hoursInput.className = 'hours-input';
       hoursInput.type = 'text';
       hoursInput.setAttribute('inputmode', 'numeric');
       hoursInput.value = String(hours).padStart(2, '0');
-      hoursInput.setAttribute('suffix', 'h');
+      hoursInput.suffix = 'h';
       if (inputWidth) {
         const numericWidth = parseInt(inputWidth);
         hoursInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
       } else {
         hoursInput.style.width = '75px';
       }
-      if (height) {
-        hoursInput.style.setProperty('--mdc-text-field-fill-height', height);
-        hoursInput.style.height = height;
-      }
-      
       const separator = document.createElement('span');
       separator.textContent = ':';
       separator.className = 'time-separator';
-      
-      const minutesInput = document.createElement('ha-textfield');
+
+      const minutesInput = document.createElement('ha-input');
       minutesInput.className = 'minutes-input';
       minutesInput.type = 'text';
       minutesInput.setAttribute('inputmode', 'numeric');
       minutesInput.value = String(minutes).padStart(2, '0');
-      minutesInput.setAttribute('suffix', 'm');
+      minutesInput.suffix = 'm';
       if (inputWidth) {
         const numericWidth = parseInt(inputWidth);
         minutesInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
       } else {
         minutesInput.style.width = '75px';
-      }
-      if (height) {
-        minutesInput.style.setProperty('--mdc-text-field-fill-height', height);
-        minutesInput.style.height = height;
       }
       
       const commitTime = () => {
@@ -1039,18 +1093,14 @@ class InputNumberSliderComboCard extends HTMLElement {
     } else if (entityType === 'input_select') {
       const selectEl = document.createElement('ha-select');
       selectEl.value = this._value || '';
-      
       const options = this._getSelectOptions();
-      options.forEach(option => {
-        const item = document.createElement('mwc-list-item');
-        item.value = option;
-        item.textContent = option;
-        selectEl.appendChild(item);
-      });
-      
+      selectEl.options = options.map(option => ({ value: option, label: option }));
+
       selectEl.addEventListener('selected', (ev) => {
-        const selectedValue = ev.target.value;
-        this._onInputCommit({ currentTarget: { value: selectedValue } });
+        const selectedValue = ev.detail?.value ?? ev.target?.value;
+        if (selectedValue !== undefined && selectedValue !== null) {
+          this._onInputCommit({ currentTarget: { value: selectedValue } });
+        }
       });
       selectEl.addEventListener('pointerdown', (ev) => this._startHold(ev));
       
@@ -1163,6 +1213,32 @@ class InputNumberSliderComboCard extends HTMLElement {
     this.shadowRoot.innerHTML = '';
     this.shadowRoot.appendChild(style);
     this.shadowRoot.appendChild(container);
+
+    if (height) {
+      this._applySelectHeight(height);
+    }
+  }
+
+  async _applySelectHeight(height) {
+    const selects = this.shadowRoot?.querySelectorAll('ha-select');
+    if (!selects) return;
+    for (const el of selects) {
+      try { await el.updateComplete; } catch (_) {}
+      if (!el.shadowRoot) continue;
+      const dropdown = el.shadowRoot.querySelector('ha-dropdown');
+      if (dropdown) {
+        try { await dropdown.updateComplete; } catch (_) {}
+      }
+      const pickerField = (dropdown?.shadowRoot || el.shadowRoot)?.querySelector('ha-picker-field') || el.shadowRoot?.querySelector('ha-picker-field');
+      if (pickerField) {
+        try { await pickerField.updateComplete; } catch (_) {}
+        const comboItem = pickerField.shadowRoot?.querySelector('ha-combo-box-item');
+        if (comboItem) {
+          comboItem.style.setProperty('--md-list-item-one-line-container-height', height);
+          comboItem.style.setProperty('--md-list-item-two-line-container-height', height);
+        }
+      }
+    }
   }
 
   _attrsSignature(entity) {
@@ -1291,7 +1367,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       root.appendChild(mkRow('Entity', picker));
 
       // Name
-      const name = document.createElement('ha-textfield');
+      const name = document.createElement('ha-input');
       name.label = 'Name (optional)';
       name.value = this._config.name || '';
       name.dataset.key = 'name';
@@ -1299,7 +1375,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       root.appendChild(mkRow('Name', name));
 
       // Height
-      const height = document.createElement('ha-textfield');
+      const height = document.createElement('ha-input');
       height.label = 'Height (e.g. 30px)';
       height.value = this._config.height || '';
       height.dataset.key = 'height';
@@ -1307,7 +1383,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       root.appendChild(mkRow('Height', height));
 
       // Width
-      const width = document.createElement('ha-textfield');
+      const width = document.createElement('ha-input');
       width.label = 'Width (e.g. 120px)';
       width.value = this._config.width || '';
       width.dataset.key = 'width';
@@ -1315,7 +1391,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       root.appendChild(mkRow('Width', width));
 
       // Input background
-      const bg = document.createElement('ha-textfield');
+      const bg = document.createElement('ha-input');
       bg.label = 'Input background (CSS color)';
       bg.value = this._config.input_background || '';
       bg.dataset.key = 'input_background';
@@ -1323,7 +1399,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       root.appendChild(mkRow('Input background', bg));
 
       // Underline thickness
-      const uTh = document.createElement('ha-textfield');
+      const uTh = document.createElement('ha-input');
       uTh.label = 'Underline thickness (e.g. 2px)';
       uTh.value = (this._config.underline?.thickness) || '';
       uTh.dataset.key = 'underline.thickness';
@@ -1331,7 +1407,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
       root.appendChild(mkRow('Underline thickness', uTh));
 
       // Underline color
-      const uCol = document.createElement('ha-textfield');
+      const uCol = document.createElement('ha-input');
       uCol.label = 'Underline color (CSS)';
       uCol.value = (this._config.underline?.color) || '';
       uCol.dataset.key = 'underline.color';
