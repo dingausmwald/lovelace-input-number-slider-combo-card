@@ -45,6 +45,7 @@ underline:
   color: var(--primary-color)
 show_hold_slider: true              # show slider overlay while holding
 hide_spinners: false                # hide number input spinners
+show_unit: true                     # show unit_of_measurement next to value (default: true)
 ```
 
 ## Usage

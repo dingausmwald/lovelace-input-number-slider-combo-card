@@ -139,7 +139,8 @@ class InputNumberSliderComboCard extends HTMLElement {
       width: undefined,
       underline: { thickness: undefined, color: 'var(--primary-color)' },
       show_hold_slider: false,
-      hide_spinners: false,
+      hide_spinners: true,
+      show_unit: true,
       name: undefined,
       ...config,
     };
@@ -779,13 +780,13 @@ class InputNumberSliderComboCard extends HTMLElement {
       const haTf = this.shadowRoot?.querySelector('ha-input');
       if (haTf) {
         haTf.value = String(this._value ?? '');
-        try { haTf.setAttribute('suffix', this._getUnit()); } catch (_) {}
       }
       const slider = this.shadowRoot?.querySelector('input[type="range"]');
       if (slider) slider.value = String(this._value ?? '');
       const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
       if (overlayVal) {
-        overlayVal.textContent = `${this._formatValueForDisplay()} ${this._getUnit()}`.trim();
+        const unitForOverlay = this._config?.show_unit !== false ? this._getUnit() : '';
+        overlayVal.textContent = `${this._formatValueForDisplay()} ${unitForOverlay}`.trim();
       }
     } else if (entityType === 'input_datetime') {
       const { hours, minutes } = this._parseTimeValue(this._value);
@@ -793,11 +794,9 @@ class InputNumberSliderComboCard extends HTMLElement {
       const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
       if (hoursInput) {
         hoursInput.value = String(hours).padStart(2, '0');
-        try { hoursInput.setAttribute('suffix', 'h'); } catch (_) {}
       }
       if (minutesInput) {
         minutesInput.value = String(minutes).padStart(2, '0');
-        try { minutesInput.setAttribute('suffix', 'm'); } catch (_) {}
       }
       const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
       if (overlayVal) {
@@ -977,11 +976,22 @@ class InputNumberSliderComboCard extends HTMLElement {
         text-align: center;
         flex-shrink: 0;
       }
-      .hours-input .mdc-text-field__affix--suffix,
-      .minutes-input .mdc-text-field__affix--suffix {
-        padding-left: 2px !important;
-        padding-right: 3px !important;
-        min-width: 8px !important;
+      .input-number-wrapper, .time-input-wrapper {
+        position: relative;
+        display: inline-block;
+      }
+      .unit-suffix, .time-unit {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        color: var(--secondary-text-color);
+        font-size: 14px;
+        z-index: 2;
+      }
+      .unit-suffix.with-spinners {
+        right: 38px;
       }
     `;
 
@@ -1014,7 +1024,12 @@ class InputNumberSliderComboCard extends HTMLElement {
     const entityType = this._getEntityType();
     let inputContainer;
     
+    const showUnit = this._config?.show_unit !== false;
+
     if (entityType === 'input_number') {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'input-number-wrapper';
+
       const tf = document.createElement('ha-input');
       const hide = !!this._config?.hide_spinners;
       tf.type = hide ? 'text' : 'number';
@@ -1022,7 +1037,6 @@ class InputNumberSliderComboCard extends HTMLElement {
         tf.setAttribute('inputmode', 'decimal');
       }
       tf.value = String(this._value ?? '');
-      tf.suffix = unit;
       tf.min = min;
       tf.max = max;
       tf.step = step;
@@ -1033,42 +1047,64 @@ class InputNumberSliderComboCard extends HTMLElement {
       }
       tf.addEventListener('change', () => this._onInputCommit({ currentTarget: { value: tf.value } }));
       tf.addEventListener('pointerdown', (ev) => this._startHold(ev));
+      wrapper.appendChild(tf);
+
+      if (showUnit && unit) {
+        const unitSuffix = document.createElement('span');
+        unitSuffix.className = hide ? 'unit-suffix' : 'unit-suffix with-spinners';
+        unitSuffix.textContent = unit;
+        wrapper.appendChild(unitSuffix);
+      }
+
       this._inputEl = tf;
-      inputContainer = tf;
+      inputContainer = wrapper;
     } else if (entityType === 'input_datetime') {
       const timeContainer = document.createElement('div');
       timeContainer.className = 'time-container';
       
       const { hours, minutes } = this._parseTimeValue(this._value);
       
+      const hoursWrapper = document.createElement('div');
+      hoursWrapper.className = 'time-input-wrapper';
       const hoursInput = document.createElement('ha-input');
       hoursInput.className = 'hours-input';
       hoursInput.type = 'text';
       hoursInput.setAttribute('inputmode', 'numeric');
       hoursInput.value = String(hours).padStart(2, '0');
-      hoursInput.suffix = 'h';
       if (inputWidth) {
         const numericWidth = parseInt(inputWidth);
         hoursInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
       } else {
         hoursInput.style.width = '75px';
       }
+      hoursWrapper.appendChild(hoursInput);
+      const hoursUnit = document.createElement('span');
+      hoursUnit.className = 'time-unit';
+      hoursUnit.textContent = 'h';
+      hoursWrapper.appendChild(hoursUnit);
+
       const separator = document.createElement('span');
       separator.textContent = ':';
       separator.className = 'time-separator';
 
+      const minutesWrapper = document.createElement('div');
+      minutesWrapper.className = 'time-input-wrapper';
       const minutesInput = document.createElement('ha-input');
       minutesInput.className = 'minutes-input';
       minutesInput.type = 'text';
       minutesInput.setAttribute('inputmode', 'numeric');
       minutesInput.value = String(minutes).padStart(2, '0');
-      minutesInput.suffix = 'm';
       if (inputWidth) {
         const numericWidth = parseInt(inputWidth);
         minutesInput.style.width = `${Math.floor(numericWidth / 2) - 10}px`;
       } else {
         minutesInput.style.width = '75px';
       }
+      minutesWrapper.appendChild(minutesInput);
+      const minutesUnit = document.createElement('span');
+      minutesUnit.className = 'time-unit';
+      minutesUnit.textContent = 'm';
+      minutesWrapper.appendChild(minutesUnit);
       
       const commitTime = () => {
         const h = Math.max(0, Math.min(23, parseInt(hoursInput.value) || 0));
@@ -1084,9 +1120,9 @@ class InputNumberSliderComboCard extends HTMLElement {
       hoursInput.addEventListener('pointerdown', (ev) => this._startTimeHold(ev, 'hours'));
       minutesInput.addEventListener('pointerdown', (ev) => this._startTimeHold(ev, 'minutes'));
       
-      timeContainer.appendChild(hoursInput);
+      timeContainer.appendChild(hoursWrapper);
       timeContainer.appendChild(separator);
-      timeContainer.appendChild(minutesInput);
+      timeContainer.appendChild(minutesWrapper);
       
       this._inputEl = timeContainer;
       inputContainer = timeContainer;
@@ -1152,7 +1188,8 @@ class InputNumberSliderComboCard extends HTMLElement {
         overlay.appendChild(slider);
         const overlayValue = document.createElement('span');
         overlayValue.className = 'overlay-value';
-        overlayValue.textContent = `${this._formatValueForDisplay()} ${unit}`.trim();
+        const unitForOverlay = showUnit ? unit : '';
+        overlayValue.textContent = `${this._formatValueForDisplay()} ${unitForOverlay}`.trim();
         overlay.appendChild(overlayValue);
       } else if (entityType === 'input_datetime' && this._timeComponent) {
         // Show slider for the specific time component being adjusted
@@ -1281,6 +1318,7 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
     setConfig(config) {
       this._config = {
         show_hold_slider: false,
+        show_unit: true,
         underline: { thickness: undefined, color: 'var(--primary-color)' },
         name: undefined,
         width: undefined,
@@ -1431,6 +1469,15 @@ if (!customElements.get('input-number-slider-combo-card-editor')) {
         this._emitConfig(this._config);
       });
       root.appendChild(mkRow('Hide spinners', hide));
+
+      // Show unit
+      const showUnit = document.createElement('ha-switch');
+      showUnit.checked = this._config.show_unit !== false;
+      showUnit.addEventListener('change', (e) => {
+        this._config.show_unit = e.currentTarget.checked;
+        this._emitConfig(this._config);
+      });
+      root.appendChild(mkRow('Show unit', showUnit));
 
 
       this.appendChild(root);
