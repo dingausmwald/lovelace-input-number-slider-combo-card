@@ -24,11 +24,11 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._holdStartX = 0;
     this._holdStartValue = 0;
     this._inputEl = null;
-    this._isPressing = false;
     this._refocusAfterCommit = false;
     this._timeComponent = null;
-    this._isEmbedded = false;
     this._rafIds = new Set();
+    this._refs = {};
+    this._holdRect = null;
 
     this._onKeydown = (e) => {
       if (e.key === 'Escape') this._cancelAdjust(true);
@@ -58,14 +58,6 @@ class InputNumberSliderComboCard extends HTMLElement {
     return { entity: first || 'input_number.example', height: '30px' };
   }
 
-  connectedCallback() {
-    // Check embedding status when connected to DOM
-    setTimeout(() => {
-      this._checkEmbedding();
-      this._applyHostHeight();
-    }, 0);
-  }
-
   disconnectedCallback() {
     // Clean up all event listeners
     this._detachGlobalPointer();
@@ -89,39 +81,6 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._commitArmed = false;
     this._awaitingServiceResult = false;
     this._showHoldSlider = false;
-    this._isPressing = false;
-  }
-
-  _checkEmbedding() {
-    const wasEmbedded = this._isEmbedded;
-    this._isEmbedded = this._isEmbeddedInEntitiesCard();
-    
-    // Re-render if embedding status changed
-    if (wasEmbedded !== this._isEmbedded && this._config) {
-      this._render();
-    }
-  }
-
-  _isEmbeddedInEntitiesCard() {
-    // Walk up the DOM, crossing shadow root boundaries via getRootNode().host
-    let node = this.parentElement;
-    while (node) {
-      if (node.tagName && (
-          node.tagName.includes('ENTITIES') ||
-          node.tagName === 'HUI-ENTITY-ROW' ||
-          (node.className && typeof node.className === 'string' && node.className.includes('entities'))
-      )) {
-        return true;
-      }
-      if (node.parentElement) {
-        node = node.parentElement;
-      } else {
-        // Cross shadow root boundary
-        const root = node.getRootNode?.();
-        node = (root && root !== node && root !== document) ? root.host : null;
-      }
-    }
-    return false;
   }
 
   setConfig(config) {
@@ -165,16 +124,24 @@ class InputNumberSliderComboCard extends HTMLElement {
 
     this._render();
     this._applyGridOptions();
-    this._applyHostHeight();
-    this._notifyResize();
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
     const entity = hass.states[this._config.entity];
+    // HA reuses the same state-object reference while an entity is unchanged,
+    // so unrelated global state updates can bail out before doing any work.
+    // Stay live while awaiting a service result so reconciliation can run even
+    // when the committed value equals the current state (no reference change).
+    if (entity && entity === this._entity && !this._awaitingServiceResult) return;
+    const hadEntity = !!this._entity;
     this._entity = entity;
-    if (!entity) return;
+    if (!entity) {
+      // Entity went missing — re-render so the "not found" message replaces stale controls.
+      if (hadEntity) this._render();
+      return;
+    }
     
     const entityType = this._getEntityType();
     let currentValue = entity.state;
@@ -210,9 +177,8 @@ class InputNumberSliderComboCard extends HTMLElement {
     const inUserControl = this._isAdjusting || this._commitArmed || this._awaitingServiceResult;
     
     if (inUserControl) {
-      if (this._awaitingServiceResult && this._lastSentValue !== undefined && 
-          ((entityType === 'input_number' && currentValue === this._lastSentValue) ||
-           (entityType !== 'input_number' && currentValue === this._lastSentValue))) {
+      if (this._awaitingServiceResult && this._lastSentValue !== undefined &&
+          currentValue === this._lastSentValue) {
         this._value = currentValue;
         this._awaitingServiceResult = false;
         this._isAdjusting = false;
@@ -222,7 +188,8 @@ class InputNumberSliderComboCard extends HTMLElement {
           this._inputEl.readOnly = false;
           this._inputEl.classList.remove('no-select');
         }
-        this._render();
+        this._unmountOverlay();
+        this._renderValueOnly();
         if (this._refocusAfterCommit) {
           this._refocusAfterCommit = false;
           this._scheduleRaf(() => {
@@ -235,8 +202,18 @@ class InputNumberSliderComboCard extends HTMLElement {
 
     const valueChanged = this._value !== currentValue;
     this._value = currentValue;
-    if (attrsChanged) {
+    if (!hadEntity) {
+      // Entity just became available after an entity-less render (e.g. the first
+      // hass update arriving after setConfig) — a full render is required to drop
+      // the "not found" message and build the real controls.
       this._render();
+    } else if (attrsChanged) {
+      // Try lightweight attr update; fall back to full render if structure changes
+      if (!this._updateAttrs()) {
+        this._render();
+      } else if (valueChanged && !inputFocused) {
+        this._renderValueOnly();
+      }
     } else if (valueChanged && !inputFocused) {
       this._renderValueOnly();
     }
@@ -245,6 +222,17 @@ class InputNumberSliderComboCard extends HTMLElement {
   getCardSize() {
     const rows = Number(this._config?.grid_options?.rows);
     return (Number.isFinite(rows) && rows > 0) ? rows : 1;
+  }
+
+  // Sections-view sizing. Mirrors HA's entities card: full width, height sized
+  // to content (no stretch). Honors an explicit grid_options.rows override.
+  getGridOptions() {
+    const rows = Number(this._config?.grid_options?.rows);
+    return {
+      columns: 12,
+      rows: (Number.isFinite(rows) && rows > 0) ? rows : 'auto',
+      min_columns: 3,
+    };
   }
 
   _getEntityType() {
@@ -256,26 +244,12 @@ class InputNumberSliderComboCard extends HTMLElement {
     return 'input_number';
   }
 
-  _isStandalone() {
-    // Use cached embedding status
-    return !this._isEmbedded;
-  }
-
-  _applyHostHeight() {
-  }
-
-  _notifyResize() {
-    try {
-      this.dispatchEvent(new Event('ll-rebuild', { bubbles: true, composed: true }));
-    } catch (_) {}
-  }
-
   _applyGridOptions() {
     const rows = Number(this._config?.grid_options?.rows);
     if (Number.isFinite(rows) && rows > 0) {
       this.style.gridRow = `span ${rows}`;
       this.style.setProperty('--dashboard-card-span', rows);
-      const container = this.shadowRoot?.querySelector(this._isStandalone() ? 'ha-card' : 'div');
+      const container = this.shadowRoot?.querySelector('.card-root');
       if (container) {
         container.style.gridRow = `span ${rows}`;
         container.style.minHeight = 'unset';
@@ -331,20 +305,62 @@ class InputNumberSliderComboCard extends HTMLElement {
     return idx >= 0 ? (s.length - idx - 1) : 0;
   }
 
+  // Maps hass.locale.number_format to an Intl locale, mirroring HA's numberFormatToLocale.
+  _getIntlLocale() {
+    const locale = this._hass?.locale;
+    if (!locale) return undefined;
+    switch (locale.number_format) {
+      case 'comma_decimal': return ['en-US', 'en'];
+      case 'decimal_comma': return ['de', 'es', 'it'];
+      case 'space_comma': return ['fr', 'sv', 'cs'];
+      case 'system': return undefined;
+      case 'none': return 'en-US';
+      case 'language':
+      default: return locale.language || undefined;
+    }
+  }
+
+  _formatNumber(num) {
+    if (!Number.isFinite(num)) return '';
+    const decimals = this._getStepDecimals();
+    const options = {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+      useGrouping: false,
+    };
+    try {
+      return new Intl.NumberFormat(this._getIntlLocale(), options).format(num);
+    } catch (_) {
+      try {
+        return new Intl.NumberFormat(undefined, options).format(num);
+      } catch (_) {
+        return decimals > 0 ? num.toFixed(decimals) : String(num);
+      }
+    }
+  }
+
+  // Accepts both '.' and ',' as decimal separator so DE users can type "1,5".
+  _parseLocaleNumber(str) {
+    if (typeof str === 'number') return str;
+    if (str == null) return NaN;
+    const s = String(str).trim();
+    if (!s) return NaN;
+    return Number(s.replace(',', '.'));
+  }
+
   _formatValueForDisplay() {
     const entityType = this._getEntityType();
-    
+
     if (entityType === 'input_number') {
       const value = Number(this._value);
       if (!Number.isFinite(value)) return '';
-      const decimals = this._getStepDecimals();
-      return decimals > 0 ? value.toFixed(decimals) : String(value);
+      return this._formatNumber(value);
     } else if (entityType === 'input_datetime') {
       return String(this._value || '00:00');
     } else if (entityType === 'input_select') {
       return String(this._value || '');
     }
-    
+
     return String(this._value || '');
   }
 
@@ -414,8 +430,8 @@ class InputNumberSliderComboCard extends HTMLElement {
     const value = e.currentTarget.value;
     
     if (entityType === 'input_number') {
-      const parsed = Number(value);
-      if (!Number.isNaN(parsed)) {
+      const parsed = this._parseLocaleNumber(value);
+      if (Number.isFinite(parsed)) {
         this._callSetValue(parsed);
       } else {
         this._render();
@@ -471,7 +487,7 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._cancelHold();
     this._holdStartX = e.clientX;
     const entityType = this._getEntityType();
-    
+
     if (entityType === 'input_select') {
       const options = this._getSelectOptions();
       const currentIndex = options.indexOf(this._value);
@@ -479,15 +495,19 @@ class InputNumberSliderComboCard extends HTMLElement {
     } else {
       this._holdStartValue = this._value ?? 0;
     }
-    
+
+    // Cache the container rect once — width does not change during a hold gesture
+    const container = this._refs?.container
+      || this.shadowRoot.querySelector('.card-root');
+    this._holdRect = container ? container.getBoundingClientRect() : this.getBoundingClientRect();
+
     this._attachGlobalPointer();
-    this._isPressing = true;
     this._holdTimer = setTimeout(() => {
       this._isAdjusting = true;
       this._commitArmed = false;
       // Hold slider works for input_number and input_select
       this._showHoldSlider = !!this._config.show_hold_slider && (entityType === 'input_number' || entityType === 'input_select');
-      this._render();
+      if (this._showHoldSlider) this._mountOverlay();
       if (this._inputEl) {
         try { this._inputEl.blur(); } catch (_) {}
         this._inputEl.readOnly = true;
@@ -503,15 +523,20 @@ class InputNumberSliderComboCard extends HTMLElement {
     const { hours, minutes } = this._parseTimeValue(this._value);
     this._holdStartValue = component === 'hours' ? hours : minutes;
     this._timeComponent = component;
+
+    // Cache the container rect once — width does not change during a hold gesture
+    const container = this._refs?.container
+      || this.shadowRoot.querySelector('.card-root');
+    this._holdRect = container ? container.getBoundingClientRect() : this.getBoundingClientRect();
+
     this._attachGlobalPointer();
-    this._isPressing = true;
     this._holdTimer = setTimeout(() => {
       this._isAdjusting = true;
       this._commitArmed = false;
       // Show hold slider for time components if enabled
       this._showHoldSlider = !!this._config.show_hold_slider;
-      this._render();
-      const targetInput = this.shadowRoot?.querySelector(`.${component}-input`);
+      if (this._showHoldSlider) this._mountOverlay();
+      const targetInput = component === 'hours' ? this._refs?.hoursInput : this._refs?.minutesInput;
       if (targetInput) {
         try { targetInput.blur(); } catch (_) {}
         targetInput.readOnly = true;
@@ -524,49 +549,40 @@ class InputNumberSliderComboCard extends HTMLElement {
   _moveHold(e) {
     if (!this._isAdjusting) return;
     if (e.cancelable) e.preventDefault();
-    
+
     const entityType = this._getEntityType();
-    
+    const width = this._holdRect?.width > 0 ? this._holdRect.width : 1;
+    const deltaX = e.clientX - this._holdStartX;
+
     if (entityType === 'input_number') {
-      const container = this.shadowRoot.querySelector(this._isStandalone() ? 'ha-card' : 'div');
-      const rect = (container ? container.getBoundingClientRect() : this.getBoundingClientRect());
-      const width = rect?.width > 0 ? rect.width : 1;
       const min = this._getMin();
       const max = this._getMax();
       const step = this._getStep();
       const stepsCount = Math.max(1, Math.round((max - min) / step));
       const pixelsPerStep = width / stepsCount;
-      const deltaX = e.clientX - this._holdStartX;
       const deltaSteps = Math.round(deltaX / pixelsPerStep);
       const candidate = this._holdStartValue + deltaSteps * step;
       const clamped = this._clampToRange(this._roundToStep(candidate));
-      
+
       if (clamped !== this._value) {
         this._value = clamped;
         this._renderValueOnly();
       }
     } else if (entityType === 'input_datetime' && this._timeComponent) {
-      const container = this.shadowRoot.querySelector(this._isStandalone() ? 'ha-card' : 'div');
-      const rect = (container ? container.getBoundingClientRect() : this.getBoundingClientRect());
-      const width = rect?.width > 0 ? rect.width : 1;
-      const deltaX = e.clientX - this._holdStartX;
-      
       const { hours, minutes } = this._parseTimeValue(this._value);
       let newHours = hours;
       let newMinutes = minutes;
-      
+
       if (this._timeComponent === 'hours') {
-        const maxSteps = 23;
-        const pixelsPerStep = width / maxSteps;
+        const pixelsPerStep = width / 23;
         const deltaSteps = Math.round(deltaX / pixelsPerStep);
         newHours = Math.max(0, Math.min(23, this._holdStartValue + deltaSteps));
       } else if (this._timeComponent === 'minutes') {
-        const maxSteps = 59;
-        const pixelsPerStep = width / maxSteps;
+        const pixelsPerStep = width / 59;
         const deltaSteps = Math.round(deltaX / pixelsPerStep);
         newMinutes = Math.max(0, Math.min(59, this._holdStartValue + deltaSteps));
       }
-      
+
       const newTimeValue = this._formatTimeValue(newHours, newMinutes);
       if (newTimeValue !== this._value) {
         this._value = newTimeValue;
@@ -575,27 +591,19 @@ class InputNumberSliderComboCard extends HTMLElement {
     } else if (entityType === 'input_select') {
       const options = this._getSelectOptions();
       if (options.length === 0) return;
-      
-      const container = this.shadowRoot.querySelector(this._isStandalone() ? 'ha-card' : 'div');
-      const rect = (container ? container.getBoundingClientRect() : this.getBoundingClientRect());
-      const width = rect?.width > 0 ? rect.width : 1;
-      const deltaX = e.clientX - this._holdStartX;
-      
-      // Calculate discrete steps - each option gets equal pixel space
+
       const totalSteps = Math.max(1, options.length - 1);
       const pixelsPerStep = width / totalSteps;
       const deltaSteps = Math.round(deltaX / pixelsPerStep);
       const newIndex = Math.max(0, Math.min(options.length - 1, this._holdStartValue + deltaSteps));
       const newValue = options[newIndex];
-      
+
       // Only update overlay display, don't change actual value until release
-      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
-      if (overlayVal && newValue) {
-        overlayVal.textContent = newValue;
+      if (this._refs?.overlayVal && newValue) {
+        this._refs.overlayVal.textContent = newValue;
       }
-      const overlaySlider = this.shadowRoot?.querySelector('.hold-slider-overlay input[type="range"]');
-      if (overlaySlider) {
-        overlaySlider.value = String(newIndex);
+      if (this._refs?.overlaySlider) {
+        this._refs.overlaySlider.value = String(newIndex);
       }
     }
   }
@@ -612,18 +620,16 @@ class InputNumberSliderComboCard extends HTMLElement {
       return;
     }
     this._detachGlobalPointer();
+    this._holdRect = null;
     if (this._inputEl && !this._isAdjusting) {
       const entityType = this._getEntityType();
       if (entityType === 'input_number') {
         this._inputEl.readOnly = false;
       } else if (entityType === 'input_datetime') {
-        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
-        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
-        if (hoursInput) hoursInput.readOnly = false;
-        if (minutesInput) minutesInput.readOnly = false;
+        if (this._refs?.hoursInput) this._refs.hoursInput.readOnly = false;
+        if (this._refs?.minutesInput) this._refs.minutesInput.readOnly = false;
       }
     }
-    this._isPressing = false;
     if (this._isAdjusting && this._config?.show_hold_slider) {
       this._attachGlobalClickListener();
     }
@@ -635,36 +641,34 @@ class InputNumberSliderComboCard extends HTMLElement {
       this._holdTimer = null;
     }
     this._detachGlobalPointer();
+    this._holdRect = null;
     if (this._inputEl && !this._isAdjusting) {
       const entityType = this._getEntityType();
       if (entityType === 'input_number') {
         this._inputEl.classList.remove('no-select');
       } else if (entityType === 'input_datetime') {
-        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
-        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
-        if (hoursInput) hoursInput.classList.remove('no-select');
-        if (minutesInput) minutesInput.classList.remove('no-select');
+        if (this._refs?.hoursInput) this._refs.hoursInput.classList.remove('no-select');
+        if (this._refs?.minutesInput) this._refs.minutesInput.classList.remove('no-select');
       }
     }
-    this._isPressing = false;
   }
 
   _confirmAdjust(refocus = true) {
     if (!(this._isAdjusting && this._commitArmed)) return;
     this._awaitingServiceResult = true;
-    
+
     // For select entities, get the final value from the overlay display
     const entityType = this._getEntityType();
     let finalValue = this._value;
     if (entityType === 'input_select') {
-      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
-      if (overlayVal && overlayVal.textContent) {
-        finalValue = overlayVal.textContent;
+      const overlayValText = this._refs?.overlayVal?.textContent;
+      if (overlayValText) {
+        finalValue = overlayValText;
         // Update internal value so UI shows correct state
         this._value = finalValue;
       }
     }
-    
+
     this._lastSentValue = finalValue;
     this._callSetValue(finalValue);
     this._isAdjusting = false;
@@ -672,27 +676,25 @@ class InputNumberSliderComboCard extends HTMLElement {
     this._showHoldSlider = false;
     this._timeComponent = null;
     if (this._inputEl) {
-      const entityType = this._getEntityType();
       if (entityType === 'input_number') {
         this._inputEl.readOnly = false;
         this._inputEl.classList.remove('no-select');
       } else if (entityType === 'input_datetime') {
-        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
-        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
-        if (hoursInput) {
-          hoursInput.readOnly = false;
-          hoursInput.classList.remove('no-select');
+        if (this._refs?.hoursInput) {
+          this._refs.hoursInput.readOnly = false;
+          this._refs.hoursInput.classList.remove('no-select');
         }
-        if (minutesInput) {
-          minutesInput.readOnly = false;
-          minutesInput.classList.remove('no-select');
+        if (this._refs?.minutesInput) {
+          this._refs.minutesInput.readOnly = false;
+          this._refs.minutesInput.classList.remove('no-select');
         }
       }
     }
     this._refocusAfterCommit = !!refocus;
+    this._holdRect = null;
     this._detachGlobalClickListener();
     this._detachKeydownListener();
-    this._render();
+    this._unmountOverlay();
   }
 
   _cancelAdjust(restoreValue) {
@@ -711,21 +713,20 @@ class InputNumberSliderComboCard extends HTMLElement {
         this._inputEl.readOnly = false;
         this._inputEl.classList.remove('no-select');
       } else if (entityType === 'input_datetime') {
-        const hoursInput = this.shadowRoot?.querySelector('.hours-input');
-        const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
-        if (hoursInput) {
-          hoursInput.readOnly = false;
-          hoursInput.classList.remove('no-select');
+        if (this._refs?.hoursInput) {
+          this._refs.hoursInput.readOnly = false;
+          this._refs.hoursInput.classList.remove('no-select');
         }
-        if (minutesInput) {
-          minutesInput.readOnly = false;
-          minutesInput.classList.remove('no-select');
+        if (this._refs?.minutesInput) {
+          this._refs.minutesInput.readOnly = false;
+          this._refs.minutesInput.classList.remove('no-select');
         }
       }
     }
+    this._holdRect = null;
     this._detachGlobalClickListener();
     this._detachKeydownListener();
-    this._render();
+    this._unmountOverlay();
   }
 
   _attachGlobalPointer() {
@@ -774,68 +775,165 @@ class InputNumberSliderComboCard extends HTMLElement {
   }
 
   _renderValueOnly() {
+    const r = this._refs || {};
     const entityType = this._getEntityType();
-    
+
     if (entityType === 'input_number') {
-      const haTf = this.shadowRoot?.querySelector('ha-input');
-      if (haTf) {
-        haTf.value = String(this._value ?? '');
+      if (r.haInput) {
+        const hide = !!this._config?.hide_spinners;
+        const numValue = Number(this._value);
+        r.haInput.value = hide && Number.isFinite(numValue)
+          ? this._formatNumber(numValue)
+          : String(this._value ?? '');
       }
-      const slider = this.shadowRoot?.querySelector('input[type="range"]');
-      if (slider) slider.value = String(this._value ?? '');
-      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
-      if (overlayVal) {
+      if (r.overlaySlider) r.overlaySlider.value = String(this._value ?? '');
+      if (r.overlayVal) {
         const unitForOverlay = this._config?.show_unit !== false ? this._getUnit() : '';
-        overlayVal.textContent = `${this._formatValueForDisplay()} ${unitForOverlay}`.trim();
+        r.overlayVal.textContent = `${this._formatValueForDisplay()} ${unitForOverlay}`.trim();
       }
     } else if (entityType === 'input_datetime') {
       const { hours, minutes } = this._parseTimeValue(this._value);
-      const hoursInput = this.shadowRoot?.querySelector('.hours-input');
-      const minutesInput = this.shadowRoot?.querySelector('.minutes-input');
-      if (hoursInput) {
-        hoursInput.value = String(hours).padStart(2, '0');
-      }
-      if (minutesInput) {
-        minutesInput.value = String(minutes).padStart(2, '0');
-      }
-      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
-      if (overlayVal) {
-        overlayVal.textContent = this._formatTimeValue(hours, minutes);
-      }
-      // Update overlay slider if it exists
-      const overlaySlider = this.shadowRoot?.querySelector('.hold-slider-overlay input[type="range"]');
-      if (overlaySlider && this._timeComponent) {
-        if (this._timeComponent === 'hours') {
-          overlaySlider.value = String(hours);
-        } else if (this._timeComponent === 'minutes') {
-          overlaySlider.value = String(minutes);
-        }
+      if (r.hoursInput) r.hoursInput.value = String(hours).padStart(2, '0');
+      if (r.minutesInput) r.minutesInput.value = String(minutes).padStart(2, '0');
+      if (r.overlayVal) r.overlayVal.textContent = this._formatTimeValue(hours, minutes);
+      if (r.overlaySlider && this._timeComponent) {
+        r.overlaySlider.value = this._timeComponent === 'hours' ? String(hours) : String(minutes);
       }
     } else if (entityType === 'input_select') {
-      const selectEl = this.shadowRoot?.querySelector('ha-select');
-      if (selectEl) {
-        selectEl.value = this._value || '';
-      }
-      // Update overlay slider if it exists
-      const overlaySlider = this.shadowRoot?.querySelector('.hold-slider-overlay input[type="range"]');
-      if (overlaySlider) {
+      if (r.selectEl) r.selectEl.value = this._value || '';
+      if (r.overlaySlider) {
         const options = this._getSelectOptions();
         const currentIndex = options.indexOf(this._value);
-        overlaySlider.value = String(currentIndex >= 0 ? currentIndex : 0);
+        r.overlaySlider.value = String(currentIndex >= 0 ? currentIndex : 0);
       }
-      // Update overlay value display
-      const overlayVal = this.shadowRoot?.querySelector('.overlay-value');
-      if (overlayVal) {
-        overlayVal.textContent = this._formatValueForDisplay();
+      if (r.overlayVal) r.overlayVal.textContent = this._formatValueForDisplay();
+    }
+  }
+
+  // Builds the hold-slider overlay element and stores refs. Does NOT attach to DOM.
+  _buildOverlay() {
+    const entityType = this._getEntityType();
+    const showUnit = this._config?.show_unit !== false;
+    const unit = this._getUnit();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'hold-slider-overlay';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+
+    const overlayValue = document.createElement('span');
+    overlayValue.className = 'overlay-value';
+
+    if (entityType === 'input_number') {
+      slider.min = String(this._getMin());
+      slider.max = String(this._getMax());
+      slider.step = String(this._getStep());
+      slider.value = String(this._value ?? '');
+      slider.addEventListener('input', (e) => this._onSliderInput(e));
+      const unitForOverlay = showUnit ? unit : '';
+      overlayValue.textContent = `${this._formatValueForDisplay()} ${unitForOverlay}`.trim();
+    } else if (entityType === 'input_datetime' && this._timeComponent) {
+      if (this._timeComponent === 'hours') {
+        slider.min = '0';
+        slider.max = '23';
+        slider.step = '1';
+        const { hours } = this._parseTimeValue(this._value);
+        slider.value = String(hours);
+      } else {
+        slider.min = '0';
+        slider.max = '59';
+        slider.step = '1';
+        const { minutes } = this._parseTimeValue(this._value);
+        slider.value = String(minutes);
+      }
+      slider.addEventListener('input', (e) => this._onTimeSliderInput(e));
+      overlayValue.textContent = this._formatValueForDisplay();
+    } else if (entityType === 'input_select') {
+      const options = this._getSelectOptions();
+      slider.min = '0';
+      slider.max = String(Math.max(0, options.length - 1));
+      slider.step = '1';
+      const currentIndex = options.indexOf(this._value);
+      slider.value = String(currentIndex >= 0 ? currentIndex : 0);
+      slider.addEventListener('input', (e) => this._onSelectSliderInput(e));
+      overlayValue.textContent = this._formatValueForDisplay();
+    } else {
+      return null;
+    }
+
+    overlay.appendChild(slider);
+    overlay.appendChild(overlayValue);
+
+    this._refs.overlay = overlay;
+    this._refs.overlaySlider = slider;
+    this._refs.overlayVal = overlayValue;
+    return overlay;
+  }
+
+  _mountOverlay() {
+    if (!this._refs?.container) return;
+    if (this._refs.overlay && this._refs.overlay.isConnected) return;
+    const overlay = this._buildOverlay();
+    if (overlay) this._refs.container.appendChild(overlay);
+  }
+
+  _unmountOverlay() {
+    if (this._refs?.overlay) {
+      this._refs.overlay.remove();
+      this._refs.overlay = null;
+      this._refs.overlaySlider = null;
+      this._refs.overlayVal = null;
+    }
+  }
+
+  // Updates min/max/step/options/unit on existing elements. Returns true if successful,
+  // false if a structural change (unit added/removed) means a full render is needed.
+  _updateAttrs() {
+    const r = this._refs;
+    if (!r || !r.container) return false;
+
+    const entityType = this._getEntityType();
+    const unit = this._getUnit();
+    const showUnit = this._config?.show_unit !== false;
+    const unitVisible = !!(showUnit && unit);
+
+    // Structural change: unit suffix needs to appear/disappear
+    if (entityType === 'input_number') {
+      const hasSuffix = !!r.unitSuffix;
+      if (hasSuffix !== unitVisible) return false;
+    }
+
+    if (entityType === 'input_number' && r.haInput) {
+      const min = this._getMin();
+      const max = this._getMax();
+      const step = this._getStep();
+      r.haInput.min = min;
+      r.haInput.max = max;
+      r.haInput.step = step;
+      if (r.unitSuffix) r.unitSuffix.textContent = unit;
+      if (r.overlaySlider) {
+        r.overlaySlider.min = String(min);
+        r.overlaySlider.max = String(max);
+        r.overlaySlider.step = String(step);
+      }
+    } else if (entityType === 'input_select' && r.selectEl) {
+      const options = this._getSelectOptions();
+      r.selectEl.options = options.map((o) => ({ value: o, label: o }));
+      if (r.overlaySlider) {
+        r.overlaySlider.max = String(Math.max(0, options.length - 1));
       }
     }
+    return true;
   }
 
   _render() {
     if (!this.shadowRoot) return;
-    
+
     // Cancel any pending RAF callbacks before re-rendering to prevent memory leaks
     this._cancelAllRafs();
+    // Reset refs — they will be repopulated as DOM is rebuilt
+    this._refs = {};
     const entity = this._entity;
     const name = this._config?.name || entity?.attributes?.friendly_name || this._config?.entity || '';
     const min = this._getMin();
@@ -848,29 +946,25 @@ class InputNumberSliderComboCard extends HTMLElement {
     const underlineThickness = this._config?.underline?.thickness;
     const underlineColor = this._config?.underline?.color;
 
-    // Default to no ha-card wrapper (Home Assistant standard)
-    const useHaCard = this._isStandalone();
     const style = document.createElement('style');
     style.textContent = `
       :host { display: block; }
-      ${useHaCard ? 'ha-card { padding: 12px 16px; --ha-card-border-width: 0; }' : ''}
+      .card-root { position: relative; }
       .row {
         display: grid;
         grid-template-columns: auto 1fr auto;
         align-items: center;
         gap: 12px;
       }
-      .icon { 
-        color: var(--state-icon-color); 
-        cursor: pointer; 
-        margin-left: 8px;
+      .icon {
+        color: var(--state-icon-color);
+        cursor: pointer;
       }
       .name {
         color: var(--primary-text-color);
         font-size: 14px;
         line-height: 1.2;
         overflow: hidden;
-        margin-left: 8px;
         text-overflow: ellipsis;
         white-space: nowrap;
         cursor: pointer;
@@ -892,7 +986,10 @@ class InputNumberSliderComboCard extends HTMLElement {
         ${inputBg ? `--ha-color-form-background: ${inputBg}; --ha-color-form-background-hover: ${inputBg};` : ''}
         ${inputWidth ? `width: ${inputWidth};` : ''}
       }
-      ${height ? `ha-input::part(wa-base) { height: ${height}; }` : ''}
+      ha-input::part(wa-base) {
+        padding: 0 var(--ha-space-2);
+        ${height ? `height: ${height};` : ''}
+      }
       ha-select {
         ${underlineThickness === '0px' || underlineThickness === '0' ? '--ha-color-border-neutral-loud: transparent !important;' : underlineThickness ? `--ha-color-border-neutral-loud: ${underlineColor} !important;` : ''}
         ${inputBg ? `--ha-color-form-background: ${inputBg}; --ha-color-form-background-hover: ${inputBg};` : ''}
@@ -995,7 +1092,9 @@ class InputNumberSliderComboCard extends HTMLElement {
       }
     `;
 
-    const container = useHaCard ? document.createElement('ha-card') : document.createElement('div');
+    const container = document.createElement('div');
+    container.className = 'card-root';
+    this._refs.container = container;
     const row = document.createElement('div');
     row.className = 'row';
 
@@ -1036,7 +1135,10 @@ class InputNumberSliderComboCard extends HTMLElement {
       if (hide) {
         tf.setAttribute('inputmode', 'decimal');
       }
-      tf.value = String(this._value ?? '');
+      const numValue = Number(this._value);
+      tf.value = hide && Number.isFinite(numValue)
+        ? this._formatNumber(numValue)
+        : String(this._value ?? '');
       tf.min = min;
       tf.max = max;
       tf.step = step;
@@ -1054,9 +1156,11 @@ class InputNumberSliderComboCard extends HTMLElement {
         unitSuffix.className = hide ? 'unit-suffix' : 'unit-suffix with-spinners';
         unitSuffix.textContent = unit;
         wrapper.appendChild(unitSuffix);
+        this._refs.unitSuffix = unitSuffix;
       }
 
       this._inputEl = tf;
+      this._refs.haInput = tf;
       inputContainer = wrapper;
     } else if (entityType === 'input_datetime') {
       const timeContainer = document.createElement('div');
@@ -1123,8 +1227,10 @@ class InputNumberSliderComboCard extends HTMLElement {
       timeContainer.appendChild(hoursWrapper);
       timeContainer.appendChild(separator);
       timeContainer.appendChild(minutesWrapper);
-      
+
       this._inputEl = timeContainer;
+      this._refs.hoursInput = hoursInput;
+      this._refs.minutesInput = minutesInput;
       inputContainer = timeContainer;
     } else if (entityType === 'input_select') {
       const selectEl = document.createElement('ha-select');
@@ -1139,8 +1245,9 @@ class InputNumberSliderComboCard extends HTMLElement {
         }
       });
       selectEl.addEventListener('pointerdown', (ev) => this._startHold(ev));
-      
+
       this._inputEl = selectEl;
+      this._refs.selectEl = selectEl;
       inputContainer = selectEl;
     }
 
@@ -1170,68 +1277,11 @@ class InputNumberSliderComboCard extends HTMLElement {
       }
     };
     right.addEventListener('click', confirmHandler, { capture: true });
-    inputContainer.addEventListener('click', confirmHandler, { capture: true });
 
     // Hold slider overlay
     if (this._showHoldSlider) {
-      const overlay = document.createElement('div');
-      overlay.className = 'hold-slider-overlay';
-      
-      if (entityType === 'input_number') {
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.min = String(min);
-        slider.max = String(max);
-        slider.step = String(step);
-        slider.value = String(this._value ?? '');
-        slider.addEventListener('input', (e) => this._onSliderInput(e));
-        overlay.appendChild(slider);
-        const overlayValue = document.createElement('span');
-        overlayValue.className = 'overlay-value';
-        const unitForOverlay = showUnit ? unit : '';
-        overlayValue.textContent = `${this._formatValueForDisplay()} ${unitForOverlay}`.trim();
-        overlay.appendChild(overlayValue);
-      } else if (entityType === 'input_datetime' && this._timeComponent) {
-        // Show slider for the specific time component being adjusted
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        if (this._timeComponent === 'hours') {
-          slider.min = '0';
-          slider.max = '23';
-          slider.step = '1';
-          const { hours } = this._parseTimeValue(this._value);
-          slider.value = String(hours);
-        } else {
-          slider.min = '0';
-          slider.max = '59';
-          slider.step = '1';
-          const { minutes } = this._parseTimeValue(this._value);
-          slider.value = String(minutes);
-        }
-        slider.addEventListener('input', (e) => this._onTimeSliderInput(e));
-        overlay.appendChild(slider);
-        const overlayValue = document.createElement('span');
-        overlayValue.className = 'overlay-value';
-        overlayValue.textContent = this._formatValueForDisplay();
-        overlay.appendChild(overlayValue);
-      } else if (entityType === 'input_select') {
-        const options = this._getSelectOptions();
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.min = '0';
-        slider.max = String(Math.max(0, options.length - 1));
-        slider.step = '1';
-        const currentIndex = options.indexOf(this._value);
-        slider.value = String(currentIndex >= 0 ? currentIndex : 0);
-        slider.addEventListener('input', (e) => this._onSelectSliderInput(e));
-        overlay.appendChild(slider);
-        const overlayValue = document.createElement('span');
-        overlayValue.className = 'overlay-value';
-        overlayValue.textContent = this._formatValueForDisplay();
-        overlay.appendChild(overlayValue);
-      }
-      
-      container.appendChild(overlay);
+      const overlay = this._buildOverlay();
+      if (overlay) container.appendChild(overlay);
     }
 
     row.appendChild(iconWrap);
@@ -1251,29 +1301,27 @@ class InputNumberSliderComboCard extends HTMLElement {
     this.shadowRoot.appendChild(style);
     this.shadowRoot.appendChild(container);
 
-    if (height) {
+    if (height && this._refs.selectEl) {
       this._applySelectHeight(height);
     }
   }
 
   async _applySelectHeight(height) {
-    const selects = this.shadowRoot?.querySelectorAll('ha-select');
-    if (!selects) return;
-    for (const el of selects) {
-      try { await el.updateComplete; } catch (_) {}
-      if (!el.shadowRoot) continue;
-      const dropdown = el.shadowRoot.querySelector('ha-dropdown');
-      if (dropdown) {
-        try { await dropdown.updateComplete; } catch (_) {}
-      }
-      const pickerField = (dropdown?.shadowRoot || el.shadowRoot)?.querySelector('ha-picker-field') || el.shadowRoot?.querySelector('ha-picker-field');
-      if (pickerField) {
-        try { await pickerField.updateComplete; } catch (_) {}
-        const comboItem = pickerField.shadowRoot?.querySelector('ha-combo-box-item');
-        if (comboItem) {
-          comboItem.style.setProperty('--md-list-item-one-line-container-height', height);
-          comboItem.style.setProperty('--md-list-item-two-line-container-height', height);
-        }
+    const el = this._refs?.selectEl;
+    if (!el) return;
+    try { await el.updateComplete; } catch (_) {}
+    if (!el.shadowRoot) return;
+    const dropdown = el.shadowRoot.querySelector('ha-dropdown');
+    if (dropdown) {
+      try { await dropdown.updateComplete; } catch (_) {}
+    }
+    const pickerField = (dropdown?.shadowRoot || el.shadowRoot)?.querySelector('ha-picker-field') || el.shadowRoot?.querySelector('ha-picker-field');
+    if (pickerField) {
+      try { await pickerField.updateComplete; } catch (_) {}
+      const comboItem = pickerField.shadowRoot?.querySelector('ha-combo-box-item');
+      if (comboItem) {
+        comboItem.style.setProperty('--md-list-item-one-line-container-height', height);
+        comboItem.style.setProperty('--md-list-item-two-line-container-height', height);
       }
     }
   }
