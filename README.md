@@ -48,6 +48,24 @@ hide_spinners: false                # hide number input spinners
 show_unit: true                     # show unit_of_measurement next to value (default: true)
 ```
 
+## Layout
+
+The card renders as a flush row without its own frame — like an entity row. To
+give it a frame, group it inside a `type: entities` card. That also lets you
+combine it with dividers or standard entity rows under a shared frame:
+
+```yaml
+type: entities
+entities:
+  - type: custom:input-number-slider-combo-card
+    entity: input_number.target_temperature
+    name: Temperature
+  - type: divider
+  - type: custom:input-number-slider-combo-card
+    entity: input_select.mode
+    name: Mode
+```
+
 ## Usage
 - **Long Press**: Hold input field for 350ms, then slide left/right to adjust
 - **Regular Input**: Click to type value normally
