@@ -1320,6 +1320,10 @@ class InputNumberSliderComboCard extends HTMLElement {
       try { await pickerField.updateComplete; } catch (_) {}
       const comboItem = pickerField.shadowRoot?.querySelector('ha-combo-box-item');
       if (comboItem) {
+        // HA >= 2026.11: ha-combo-box-item is no longer md-list-item based
+        comboItem.style.setProperty('--ha-combo-box-item-min-height', height);
+        comboItem.style.setProperty('--ha-combo-box-item-two-line-min-height', height);
+        // HA < 2026.11 (md-list-item based)
         comboItem.style.setProperty('--md-list-item-one-line-container-height', height);
         comboItem.style.setProperty('--md-list-item-two-line-container-height', height);
       }
